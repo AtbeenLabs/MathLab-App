@@ -43,8 +43,8 @@
       "name": "تحلیل",
       "url": "/MathLab-App/#analysis",
       "description": "تحلیل کامل عدد — ارقام، اول بودن، خواص"
-    }
-    {,
+    },
+    {
       "name": "شمارنده",
       "url": "/MathLab-App/#divisors",
       "description": "شمارش مقسوم‌علیه‌های زوج و فرد"

@@ -11,7 +11,7 @@
   "theme_color": "#2b1f10",
   "icons": [
     {
-      "src": "data:image/svg+xml,&lt;svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'&gt;&lt;text x='50' y='72' font-size='72' text-anchor='middle' font-family='serif' font-weight='900'&gt;∞&lt;/text&gt;&lt;/svg&gt;",
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text x='50' y='72' font-size='72' text-anchor='middle' font-family='serif' font-weight='900'>∞</text></svg>",
       "isSquare": false,
       "isPng": false,
       "isWebp": false,

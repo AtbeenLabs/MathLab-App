@@ -1,61 +1,51 @@
 {
-  "background_color": "#f2e9d4",
+  "name": "AtbinYar",
+  "short_name": "AtbinYar",
   "description": "غربال، تجزیه، شمارنده، ب.م.م، ک.م.م و تحلیل عدد — آزمایشگاه ریاضی سه‌بعدی ساخته‌شده توسط آتبین امیدی.",
+  "id": "/atbinyar-mathlab",
+  "lang": "fa",
   "dir": "rtl",
   "display": "standalone",
-  "name": "AtbinYar",
-  "orientation": "any",
-  "scope": "/MathLab-App/",
-  "short_name": "AtbinYar",
-  "start_url": "/MathLab-App/",
+  "background_color": "#f2e9d4",
   "theme_color": "#2b1f10",
+  "start_url": "./",
+  "categories": ["education", "productivity", "utilities"],
   "icons": [
     {
-      "src": "icon_196.png",
-      "sizes": "196x196",
-      "type": "image/png",
-      "purpose": "any"
+      "src": "icon_192x192.png",
+      "sizes": "192x192",
+      "type": "image/png"
     },
     {
-      "src": "icon_512.png",
+      "src": "icon_512x512.png",
       "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "icon_512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "maskable"
+      "type": "image/png"
     }
-  ],
-  "id": "/atbinyar-mathlab",
-  "categories": [
-    "education",
-    "productivity",
-    "utilities"
   ],
   "shortcuts": [
     {
       "name": "غربال",
-      "url": "/MathLab-App/#sieve",
-      "description": "غربال اراتستن — پیدا کردن اعداد اول"
+      "short_name": "غربال",
+      "description": "غربال اراتستن",
+      "url": "./#sieve"
     },
     {
       "name": "تجزیه",
-      "url": "/MathLab-App/#factor",
-      "description": "تجزیه به عامل‌های اول"
-    },
-    {
-      "name": "تحلیل",
-      "url": "/MathLab-App/#analysis",
-      "description": "تحلیل کامل عدد — ارقام، اول بودن، خواص"
+      "short_name": "تجزیه",
+      "description": "تجزیه به عامل‌های اول",
+      "url": "./#factor"
     },
     {
       "name": "شمارنده",
-      "url": "/MathLab-App/#divisors",
-      "description": "شمارش مقسوم‌علیه‌های زوج و فرد"
+      "short_name": "شمارنده",
+      "description": "شمارش مقسوم‌علیه‌ها",
+      "url": "./#divisors"
+    },
+    {
+      "name": "تحلیل",
+      "short_name": "تحلیل",
+      "description": "تحلیل کامل عدد",
+      "url": "./#analysis"
     }
-  ],
-  "lang": "fa"
+  ]
 }

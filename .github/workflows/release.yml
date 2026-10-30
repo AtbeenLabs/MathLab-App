@@ -280,19 +280,31 @@ jobs:
           # Look up releases through the collection endpoint: the tag endpoint
           # does not return draft releases. This also makes retries idempotent.
           RELEASES_API="repos/$GITHUB_REPOSITORY/releases?per_page=100"
-          RELEASE_ID="$(gh api "$RELEASES_API" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n 1 || true)"
+          find_release_id() {
+            gh api "$RELEASES_API" \
+              --jq "[.[] | select(.tag_name == \"$TAG\")] | sort_by(.created_at) | last | .id // empty"
+          }
 
+          RELEASE_ID="$(find_release_id)"
           if [ -z "$RELEASE_ID" ]; then
             gh release create "$TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --draft \
               --title "AtbinYar v$VERSION" \
               --notes "Automated release from MathLab-App main."
-            RELEASE_ID="$(gh api "$RELEASES_API" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n 1)"
+
+            # The Releases collection can be briefly eventually-consistent after creation.
+            for attempt in {1..15}; do
+              RELEASE_ID="$(find_release_id)"
+              [ -n "$RELEASE_ID" ] && break
+              echo "Waiting for GitHub Release record ($attempt/15)..."
+              sleep 2
+            done
           fi
 
           if [ -z "$RELEASE_ID" ]; then
             echo "::error::Could not find or create the GitHub Release for $TAG."
+            gh api "$RELEASES_API" --jq '.[] | [.tag_name, .id, .draft] | @tsv' || true
             exit 1
           fi
 

@@ -48,7 +48,10 @@
       "icon_512x512.png",
       "logo.png",
       "index.js",
-      "package.json"
+      "package.json",
+      "atbinyar-primecount-api.js",
+      "primecount-worker.js",
+      "THIRD_PARTY_LICENSES/primecount-COPYING.txt"
     ],
     "publish": [
       {
@@ -81,10 +84,5 @@
       "maintainer": "Atbin Omidi <atbeenn@gmail.com>"
     },
     "artifactName": "AtbinYar_v${version}.${ext}"
-  },
-  "files": [
-    "atbinyar-primecount-api.js",
-    "primecount-worker.js",
-    "THIRD_PARTY_LICENSES/primecount-COPYING.txt"
-  ]
+  }
 }

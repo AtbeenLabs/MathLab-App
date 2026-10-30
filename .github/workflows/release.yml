@@ -54,6 +54,7 @@ jobs:
           fi
           git reset --hard "$REMOTE_HEAD"
 
+          python -m pip install --disable-pip-version-check Pillow
           python scripts/process-brand-assets.py
 
           VERSION="$(node -p "require('./package.json').version")"

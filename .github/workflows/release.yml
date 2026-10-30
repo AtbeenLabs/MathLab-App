@@ -69,8 +69,6 @@ jobs:
       - name: Install dependencies
         run: npm install
       - name: Build Windows
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run build:win
       - uses: actions/upload-artifact@v4
         with:
@@ -95,8 +93,6 @@ jobs:
       - name: Install dependencies
         run: npm install
       - name: Build Linux
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run build:linux
       - uses: actions/upload-artifact@v4
         with:
@@ -196,7 +192,17 @@ jobs:
           set -euo pipefail
           APK="$(find android/app/build/outputs/apk/release -name '*.apk' -print -quit)"
           test -n "$APK"
-          CERT_DIGEST="$(apksigner verify --print-certs "$APK" | awk -F': ' '/Signer #1 certificate SHA-256 digest/ {print $2}' | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -z "$SDK_ROOT" ]; then
+            echo "::error::Android SDK path is not configured."
+            exit 1
+          fi
+          APKSIGNER="$(find "$SDK_ROOT/build-tools" -type f -name apksigner 2>/dev/null | sort -V | tail -n 1)"
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::apksigner was not found in Android SDK build-tools."
+            exit 1
+          fi
+          CERT_DIGEST="$("$APKSIGNER" verify --print-certs "$APK" | awk -F': ' '/Signer #1 certificate SHA-256 digest/ {print $2}' | tr -d ':' | tr '[:upper:]' '[:lower:]')"
           EXPECTED_DIGEST="7f9978ade037b7119d411b438f733a3770d1b88af1ac145f8abafbfa69f64b41"
           if [ "$CERT_DIGEST" != "$EXPECTED_DIGEST" ]; then
             echo "::error::Built APK certificate does not match the installed app's signing certificate."

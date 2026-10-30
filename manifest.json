@@ -6,20 +6,26 @@
   "lang": "fa",
   "dir": "rtl",
   "display": "standalone",
-  "background_color": "#f2e9d4",
-  "theme_color": "#2b1f10",
+  "background_color": "#071321",
+  "theme_color": "#071321",
   "start_url": "./",
-  "categories": ["education", "productivity", "utilities"],
+  "categories": [
+    "education",
+    "productivity",
+    "utilities"
+  ],
   "icons": [
     {
-      "src": "icon_192x192.png",
+      "src": "icon_192x192.png?v=2",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
     },
     {
-      "src": "icon_512x512.png",
+      "src": "icon_512x512.png?v=2",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     }
   ],
   "shortcuts": [

@@ -14,7 +14,7 @@ function createWindow() {
     minHeight: 560,
     show: false,
     title: 'AtbinYar - آزمایشگاه ریاضی',
-    icon: path.join(__dirname, 'icon_512x512.png'),
+    icon: path.join(__dirname, 'icon_maskable_512.png'),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,

@@ -143,13 +143,26 @@ root = Path(".")
 master = root / "icon_512x512.png"
 logo = root / "logo.png"
 
+def make_branded_icon(source: Path, output: Path, size: int, scale: float = 0.80) -> None:
+    canvas = Image.new("RGBA", (size, size), (7, 19, 33, 255))
+    artwork = Image.open(source).convert("RGBA")
+    side = round(size * scale)
+    artwork = artwork.resize((side, side), Image.Resampling.LANCZOS)
+    canvas.alpha_composite(artwork, ((size - side) // 2, (size - side) // 2))
+    canvas.save(output, format="PNG", optimize=True)
+
+
 if master.exists():
     process(master)
     Image.open(master).convert("RGBA").save(logo, format="PNG", optimize=True)
     Image.open(master).convert("RGBA").resize((192, 192), Image.Resampling.LANCZOS).save(
         root / "icon_192x192.png", format="PNG", optimize=True
     )
+    make_branded_icon(master, root / "icon_maskable_512.png", 512, 0.80)
+    make_branded_icon(master, root / "favicon.png", 512, 0.86)
 elif logo.exists():
     process(logo)
+    make_branded_icon(logo, root / "icon_maskable_512.png", 512, 0.80)
+    make_branded_icon(logo, root / "favicon.png", 512, 0.86)
 else:
     raise RuntimeError("No AtbinYar icon master (icon_512x512.png or logo.png) was found.")

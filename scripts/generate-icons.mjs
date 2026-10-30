@@ -63,6 +63,8 @@ await fs.writeFile(path.join(buildDir, 'icon.ico'), ico);
 // Capacitor launcher source. Transparent corners reveal the selected dark
 // adaptive-icon background instead of a baked-in white square.
 await master.clone().resize(1024, 1024, { fit: 'contain' })
+  .png().toFile(path.join(assetDir, 'icon.png'));
+await master.clone().resize(1024, 1024, { fit: 'contain' })
   .png().toFile(path.join(assetDir, 'logo.png'));
 
 // A transparent, premium launch illustration. Capacitor paints the deep-navy

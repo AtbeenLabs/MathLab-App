@@ -18,7 +18,7 @@ permissions:
 
 concurrency:
   group: atbinyar-release-main
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   version:
@@ -186,7 +186,7 @@ jobs:
           // Capacitor's generated Android app uses the standard Groovy android{} DSL.
           // Configure the Android extension in one final block so values and release signing
           // override the template defaults without depending on their line formatting.
-          if (!/^\\s*android\\s*\\{/m.test(gradle)) {
+          if (!gradle.includes('android {') && !gradle.includes('android{')) {
             throw new Error('Android Gradle extension block is missing.');
           }
 

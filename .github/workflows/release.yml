@@ -337,7 +337,7 @@ jobs:
       - name: Generate Android launcher and adaptive icons
         run: |
           set -euo pipefail
-          npx capacitor-assets generate --android --iconBackgroundColor '#04060f' --iconBackgroundColorDark '#04060f' --splashBackgroundColor '#04060f' --splashBackgroundColorDark '#04060f'
+          npx capacitor-assets generate --android --iconBackgroundColor '#071321' --iconBackgroundColorDark '#071321' --splashBackgroundColor '#071321' --splashBackgroundColorDark '#071321'
           APP_MANIFEST="android/app/src/main/AndroidManifest.xml"
           grep -q 'android:icon="@mipmap/ic_launcher"' "$APP_MANIFEST"
           if ! test -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml; then

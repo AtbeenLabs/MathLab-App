@@ -12,6 +12,7 @@ on:
       - "index.js"
       - "capacitor.config.json"
       - ".github/workflows/release.yml"
+      - "scripts/**"
   workflow_dispatch:
 
 permissions:
@@ -90,6 +91,8 @@ jobs:
           node-version: 22
       - name: Install dependencies
         run: npm install
+      - name: Generate Windows and Linux icon assets
+        run: npm run build:icons
       - name: Build Windows
         run: npm run build:win
       - uses: actions/upload-artifact@v4
@@ -114,6 +117,8 @@ jobs:
           node-version: 22
       - name: Install dependencies
         run: npm install
+      - name: Generate Windows and Linux icon assets
+        run: npm run build:icons
       - name: Build Linux
         run: npm run build:linux
       - uses: actions/upload-artifact@v4
@@ -143,6 +148,8 @@ jobs:
           java-version: 21
       - name: Install Node dependencies
         run: npm install
+      - name: Generate icon source assets
+        run: npm run build:icons
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -155,6 +162,17 @@ jobs:
           cp index.html manifest.json icon_192x192.png icon_512x512.png logo.png www/
       - name: Add Android platform
         run: npx cap add android
+      - name: Generate Android launcher and adaptive icons
+        run: |
+          set -euo pipefail
+          npx capacitor-assets generate --android --iconBackgroundColor '#04060f' --iconBackgroundColorDark '#04060f' --splashBackgroundColor '#04060f' --splashBackgroundColorDark '#04060f'
+          APP_MANIFEST="android/app/src/main/AndroidManifest.xml"
+          grep -q 'android:icon="@mipmap/ic_launcher"' "$APP_MANIFEST"
+          if ! find android/app/src/main/res -type f \\( -name 'ic_launcher*.png' -o -name 'ic_launcher*.xml' \\) -print -quit | grep -q .; then
+            echo "::error::Android launcher icon resources were not generated."
+            exit 1
+          fi
+          echo "Android launcher icon resources are present."
       - name: Configure signing and version
         env:
           APP_VERSION: ${{ needs.version.outputs.version }}

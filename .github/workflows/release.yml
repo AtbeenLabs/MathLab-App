@@ -266,12 +266,41 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: release-assets
+
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.version.outputs.version }}
+        shell: bash
         run: |
-          gh release create "v$VERSION" release-assets/**/* \
+          set -euo pipefail
+          TAG="v$VERSION"
+
+          # Create a draft first so users never see a half-uploaded release.
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --draft \
+              --title "AtbinYar v$VERSION" \
+              --notes "Automated release from MathLab-App main."
+          fi
+
+          # Upload files only; artifact folders themselves must not be passed to gh.
+          mapfile -d '' -t ASSETS < <(find release-assets -type f -print0)
+          if [ "${#ASSETS[@]}" -eq 0 ]; then
+            echo "::error::No release files were downloaded from build jobs."
+            exit 1
+          fi
+
+          printf 'Uploading %s release files:\n' "${#ASSETS[@]}"
+          printf ' - %s\n' "${ASSETS[@]}"
+          gh release upload "$TAG" "${ASSETS[@]}" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "AtbinYar v$VERSION" \
-            --notes "Automated release from MathLab-App main."
+            --clobber
+
+          # Publish only after every platform's files have uploaded successfully.
+          RELEASE_ID="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .id)"
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            -F draft=false >/dev/null
+
+          echo "Published AtbinYar $TAG with ${#ASSETS[@]} assets."

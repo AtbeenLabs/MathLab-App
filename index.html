@@ -128,6 +128,7 @@ sub{font-size:0.62em;line-height:0;vertical-align:baseline;position:relative;bot
 @keyframes fadeUp{from{opacity:0;transform:translateY(20px);}}
 .hero p{font-size:clamp(.95rem,2.3vw,1.1rem);color:var(--ink-mut);max-width:640px;margin:0 auto;line-height:1.9;position:relative;z-index:1;animation:fadeUp .8s cubic-bezier(.34,1.56,.64,1) .35s both;}
 .hero .credit{font-size:.85rem;color:var(--blue);margin-bottom:10px;font-weight:600;font-style:italic;position:relative;z-index:1;animation:fadeUp .7s cubic-bezier(.34,1.56,.64,1) .1s both;}
+.teacher-acknowledgement{margin-top:6px;font-size:.78rem;color:var(--ink-dim);font-weight:600;line-height:1.8;text-align:center;}
 
 /* ===== CARDS ===== */
 .card{background:var(--surface);border:1.5px solid var(--line-strong);border-radius:var(--radius);padding:24px;margin-bottom:20px;position:relative;box-shadow:4px 4px 0 var(--shadow);transition:box-shadow .3s, border-color .3s, transform .3s;outline:1px solid var(--line-strong);outline-offset:3px;outline-style:dotted;}
@@ -585,6 +586,7 @@ footer b{color:var(--ink);font-weight:900;border-bottom:2px solid var(--red);pad
       <span class="hero-float f5">√2</span>
     </div>
     <div class="credit">ساخته شده توسط آتبین امیدی</div>
+    <div class="teacher-acknowledgement">با تشکر از زحمات آقای ایرانپور عزیز</div>
     <h1 id="heroTitle">آزمایشگاه ریاضی</h1>
     <p id="heroSubtitle">غربال، تجزیه، شمارنده، ب.م.م، ک.م.م و تحلیل عدد — همه در یک کهکشان.</p>
   </section>
@@ -813,8 +815,9 @@ footer b{color:var(--ink);font-weight:900;border-bottom:2px solid var(--red);pad
   </section>
 </main>
 
-<footer><div class="container">ساخته شده توسط <b>آتبین امیدی</b></div></footer>
+<footer><div class="container">ساخته شده توسط <b>آتبین امیدی</b><div class="teacher-acknowledgement">با تشکر از زحمات آقای ایرانپور عزیز</div></div></footer>
 
+<script src="atbinyar-primecount-api.js"></script>
 <script>
 (function(){
 'use strict';
@@ -884,9 +887,9 @@ function isPrimeMR(n){
   }
   let d = n - B1, s = 0;
   while ((d & B1) === B0){ d >>= B1; s++; }
-  const witnesses = n < 3215031751n ? [2n,3n,5n,7n,11n]
-    : n < 3474749660383n ? [2n,3n,5n,7n,11n,13n]
-    : [2n,3n,5n,7n,11n,13n,17n,19n,23n,29n,31n,37n];
+  // Deterministic Miller–Rabin bases for every integer below 2^64.
+  // All AtbinYar numeric inputs are <= 10^15, safely inside this proven range.
+  const witnesses = [2n, 325n, 9375n, 28178n, 450775n, 9780504n, 1795265022n];
   for (const a of witnesses){
     if (a >= n) continue;
     let x = powmod(a, d, n);
@@ -903,16 +906,20 @@ function isPrimeMR(n){
 function pollardRho(n){
   if (n % 2n === B0) return 2n;
   if (n % 3n === B0) return 3n;
-  for (let c = 1n; c < 50n; c++){
+
+  // Restart with different polynomials and cap each attempt.
+  for (let c = 1n; c < 100n; c++){
     let x = 2n, y = 2n, d = B1;
     const f = v => (v * v + c) % n;
-    while (d === B1){
+    for (let iteration = 0; iteration < 250000 && d === B1; iteration++){
       x = f(x);
       y = f(f(y));
       d = gcdBig(x > y ? x - y : y - x, n);
     }
-    if (d !== n) return d;
+    if (d > B1 && d < n) return d;
   }
+
+  // Guaranteed fallback for AtbinYar's supported <= 10^15 inputs.
   for (let p = 5n; p * p <= n; p += 2n){
     if (n % p === B0) return p;
   }
@@ -924,7 +931,11 @@ function factorizeBig(n){
     if (m === B1) return;
     if (isPrimeMR(m)){ primes.push(m); return; }
     const d = pollardRho(m);
-    rec(d); rec(m / d);
+    if (d <= B1 || d >= m) {
+      throw new Error('تجزیهٔ عدد بزرگ در این تلاش همگرا نشد؛ دوباره تلاش کنید.');
+    }
+    rec(d);
+    rec(m / d);
   }
   rec(n);
   primes.sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
@@ -1075,22 +1086,119 @@ function getBasePrimes(limit) {
   return primes.filter(p => p <= limit);
 }
 const primeCountCache = new Map();
-function countPrimesUpTo(N){
-  if (N < 2) return 0;
-  if (primeCountCache.has(N)) return primeCountCache.get(N);
-  let result;
-  if (N <= 5e7){
-    const sieve = new Uint8Array(N + 1);
-    let c = 0;
-    for (let i = 2; i <= N; i++){
-      if (!sieve[i]){ c++; if (i * i <= N) for (let j = i * i; j <= N; j += i) sieve[j] = 1; }
+const primeCountInFlight = new Map();
+let primeCountWorker = null;
+let primeCountWorkerId = 0;
+let primeCountMainModulePromise = null;
+const primeCountWorkerRequests = new Map();
+
+function countPrimesByExactSieve(N){
+  const sieve = new Uint8Array(N + 1);
+  let count = 0;
+  for (let p = 2; p <= N; p++){
+    if (!sieve[p]){
+      count++;
+      if (p * p <= N){
+        for (let multiple = p * p; multiple <= N; multiple += p) sieve[multiple] = 1;
+      }
     }
-    result = c;
-  } else {
-  result = Math.round(N / (Math.log(N) - 1));
+  }
+  return count;
 }
-  primeCountCache.set(N, result);
-  return result;
+
+function stopPrimeCountWorker(error){
+  const worker = primeCountWorker;
+  primeCountWorker = null;
+  if (worker) worker.terminate();
+  for (const request of primeCountWorkerRequests.values()) request.reject(error);
+  primeCountWorkerRequests.clear();
+}
+
+function getPrimeCountWorker(){
+  if (primeCountWorker) return primeCountWorker;
+  if (typeof Worker !== 'function') throw new Error('Web Workers are not available.');
+
+  const worker = new Worker(new URL('primecount-worker.js', document.baseURI));
+  worker.onmessage = event => {
+    const data = event.data || {};
+    const request = primeCountWorkerRequests.get(data.id);
+    if (!request) return;
+    primeCountWorkerRequests.delete(data.id);
+    if (data.error){
+      request.reject(new Error(data.error));
+      return;
+    }
+    const count = Number(data.count);
+    if (!Number.isSafeInteger(count) || count < 0){
+      request.reject(new Error('The exact prime-count engine returned an invalid result.'));
+      return;
+    }
+    request.resolve(count);
+  };
+  worker.onerror = event => {
+    event.preventDefault?.();
+    stopPrimeCountWorker(new Error(event.message || 'Prime-count worker failed.'));
+  };
+  worker.onmessageerror = () => stopPrimeCountWorker(new Error('Unreadable prime-count worker message.'));
+  primeCountWorker = worker;
+  return worker;
+}
+
+function countPrimesInWorker(N){
+  return new Promise((resolve, reject) => {
+    let worker;
+    try { worker = getPrimeCountWorker(); }
+    catch (error) { reject(error); return; }
+
+    const id = ++primeCountWorkerId;
+    primeCountWorkerRequests.set(id, { resolve, reject });
+    try { worker.postMessage({ id, limit: String(N) }); }
+    catch (error) {
+      primeCountWorkerRequests.delete(id);
+      reject(error);
+    }
+  });
+}
+
+async function countPrimesWithWasm(N){
+  try {
+    return await countPrimesInWorker(N);
+  } catch (workerError) {
+    // Some file:// or embedded WebView configurations disallow local workers.
+    // Fall back to the same exact WASM engine on the main thread, never to an estimate.
+    if (typeof createAtbinYarPrimecountModule !== 'function'){
+      throw new Error('موتور دقیق شمارش اعداد اول در این نسخه بارگذاری نشده است.', { cause: workerError });
+    }
+    if (!primeCountMainModulePromise) primeCountMainModulePromise = createAtbinYarPrimecountModule();
+    const module = await primeCountMainModulePromise;
+    const rawCount = module._atbinyar_prime_count(BigInt(N));
+    if (typeof rawCount !== 'bigint' || rawCount < B0) {
+      throw new Error('موتور شمارش اعداد اول پاسخ معتبر برنگرداند.');
+    }
+    const count = Number(rawCount);
+    if (!Number.isSafeInteger(count)) throw new Error('نتیجه خارج از محدودهٔ دقیق اعداد قابل نمایش است.');
+    return count;
+  }
+}
+
+function countPrimesUpTo(N){
+  if (!Number.isSafeInteger(N) || N < 0 || N > 1e14) {
+    return Promise.reject(new RangeError('Prime count supports safe integers from 0 to 10^14.'));
+  }
+  if (N < 2) return Promise.resolve(0);
+  if (primeCountCache.has(N)) return Promise.resolve(primeCountCache.get(N));
+  if (primeCountInFlight.has(N)) return primeCountInFlight.get(N);
+
+  const calculation = N <= 5e7
+    ? Promise.resolve().then(() => countPrimesByExactSieve(N))
+    : countPrimesWithWasm(N);
+  const shared = calculation.then(count => {
+    if (!Number.isSafeInteger(count) || count < 0) throw new Error('Exact prime counting returned an invalid result.');
+    primeCountCache.set(N, count);
+    return count;
+  }).finally(() => primeCountInFlight.delete(N));
+  primeCountInFlight.set(N, shared);
+  return shared;
 }
 function isPrimeInWindow(start, end){
   const size = end - start + 1;
@@ -1267,10 +1375,22 @@ async function renderSieveWindow(){
   sieveState.viewEnd = viewEnd;
 
   $('#sieveMax').textContent = fa(N);
-  const totalPrimes = countPrimesUpTo(N);
-
-$('#sieveTotal').textContent =
-  faG(totalPrimes) + (N > 5e7 ? ' (تقریبی)' : '');
+  $('#sieveTotal').textContent = 'در حال محاسبه…';
+  $('#sieveStatus').textContent = 'در حال شمارش دقیق اعداد اول…';
+  let totalPrimes;
+  try {
+    totalPrimes = await countPrimesUpTo(N);
+  } catch (error) {
+    if (!alive()) return;
+    console.error('[AtbinYar prime count]', error);
+    $('#sieveTotal').textContent = '—';
+    $('#sieveStatus').textContent = 'محاسبهٔ دقیق انجام نشد؛ فایل‌های برنامه را بررسی یا برنامه را دوباره نصب کنید.';
+    $('#sieveGrid').innerHTML = '';
+    $('#sieveNav').hidden = true;
+    return;
+  }
+  if (!alive()) return;
+  $('#sieveTotal').textContent = faG(totalPrimes);
 
   const grid = $('#sieveGrid');
   grid.innerHTML = '';

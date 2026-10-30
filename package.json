@@ -18,7 +18,9 @@
     "start": "electron .",
     "build:win": "electron-builder --win --publish never",
     "build:linux": "electron-builder --linux --publish never",
-    "build:icons": "node scripts/generate-icons.mjs"
+    "build:icons": "node scripts/generate-icons.mjs",
+    "test:math": "node scripts/test-app-math.cjs",
+    "test:primecount": "node scripts/test-primecount-wasm.cjs"
   },
   "dependencies": {
     "electron-updater": "6.8.11"
@@ -79,5 +81,10 @@
       "maintainer": "Atbin Omidi <atbeenn@gmail.com>"
     },
     "artifactName": "AtbinYar_v${version}.${ext}"
-  }
+  },
+  "files": [
+    "atbinyar-primecount-api.js",
+    "primecount-worker.js",
+    "THIRD_PARTY_LICENSES/primecount-COPYING.txt"
+  ]
 }

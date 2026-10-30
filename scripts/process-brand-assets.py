@@ -30,7 +30,9 @@ def process(path: Path) -> None:
     white = bytearray(count)
 
     for i, (r, g, b, a) in enumerate(pixels):
-        if a > 0 and min(r, g, b) >= WHITE_MIN and max(r, g, b) - min(r, g, b) <= WHITE_CHROMA:
+        # Transparent pixels are also flood-fill seeds: some source icons
+        # already have transparent corners but still contain a white halo ring.
+        if a == 0 or (min(r, g, b) >= WHITE_MIN and max(r, g, b) - min(r, g, b) <= WHITE_CHROMA):
             white[i] = 1
 
     # Flood-fill only from the outside edges. White details inside the artwork
@@ -63,7 +65,7 @@ def process(path: Path) -> None:
                         white[ni] = 2
                         queue.append(ni)
 
-    removed = sum(1 for value in white if value == 2)
+    removed = sum(1 for i, value in enumerate(white) if value == 2 and pixels[i][3] > 0)
     if removed < 20:
         # A fully transparent source is already processed; an opaque source
         # without a white matte is not silently modified.

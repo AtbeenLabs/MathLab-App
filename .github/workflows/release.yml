@@ -69,7 +69,7 @@ jobs:
               for y in range(height):
                   for x in range(width):
                       r, g, b, a = pixels[x, y]
-                      if a and min(r, g, b) >= 220 and max(r, g, b) - min(r, g, b) <= 55:
+                      if a == 0 or (a and min(r, g, b) >= 220 and max(r, g, b) - min(r, g, b) <= 55):
                           candidates[y * width + x] = 1
 
               background = bytearray(total)
@@ -109,7 +109,7 @@ jobs:
                   neighbours = []
                   for dy in (-1, 0, 1):
                       for dx in (-1, 0, 1):
-                          if not (dx or dy):
+                          if dx or dy:
                               continue
                           nx, ny = x + dx, y + dy
                           if 0 <= nx < width and 0 <= ny < height and not background[ny * width + nx]:

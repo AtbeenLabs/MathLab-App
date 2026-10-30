@@ -23,6 +23,7 @@ concurrency:
 jobs:
   version:
     name: Version the source
+    if: github.event_name == 'workflow_dispatch' || !startsWith(github.event.head_commit.message, 'chore(release):')
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.bump.outputs.version }}
@@ -179,57 +180,84 @@ jobs:
           const [major, minor, patch] = process.env.APP_VERSION.split('.').map(Number);
           const versionCode = major * 10000 + minor * 100 + patch;
           const file = 'android/app/build.gradle';
-          let gradle = fs.readFileSync(file, 'utf8');
+          let gradleLines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
 
-          // Capacitor/AGP templates differ: accept both Groovy and assignment syntax.
-          const versionCodePattern = /^(\\s*versionCode\\s*)=?\\s*\\d+\\s*$/m;
-          const versionNamePattern = /^(\\s*versionName\\s*)=?\\s*["'][^"']+["']\\s*$/m;
-          if (!versionCodePattern.test(gradle)) {
-            throw new Error('Could not find numeric versionCode in android/app/build.gradle');
+          let codeIndex = -1;
+          let nameIndex = -1;
+          for (let i = 0; i < gradleLines.length; i++) {
+            const trimmed = gradleLines[i].trim();
+            if (trimmed.startsWith('versionCode ') || trimmed.startsWith('versionCode=')) codeIndex = i;
+            if (trimmed.startsWith('versionName ') || trimmed.startsWith('versionName=')) nameIndex = i;
           }
-          if (!versionNamePattern.test(gradle)) {
-            throw new Error('Could not find versionName in android/app/build.gradle');
+          if (codeIndex < 0) throw new Error('versionCode line not found. Gradle app file format changed.');
+          if (nameIndex < 0) throw new Error('versionName line not found. Gradle app file format changed.');
+
+          const codeIndent = gradleLines[codeIndex].match(/^\s*/)[0];
+          const nameIndent = gradleLines[nameIndex].match(/^\s*/)[0];
+          gradleLines[codeIndex] = codeIndent + 'versionCode ' + versionCode;
+          gradleLines[nameIndex] = nameIndent + 'versionName "' + process.env.APP_VERSION + '"';
+
+          // Find the app android{} block's buildTypes/release blocks.
+          const buildTypesIndex = gradleLines.findIndex(line => line.trim() === 'buildTypes {');
+          if (buildTypesIndex < 0) throw new Error('buildTypes block not found in app Gradle file.');
+          let releaseIndex = -1;
+          for (let i = buildTypesIndex + 1; i < gradleLines.length; i++) {
+            if (gradleLines[i].trim() === 'release {') { releaseIndex = i; break; }
           }
+          if (releaseIndex < 0) throw new Error('release build type not found in app Gradle file.');
 
-          gradle = gradle.replace(versionCodePattern, (_, prefix) => prefix + versionCode);
-          gradle = gradle.replace(versionNamePattern, (_, prefix) => prefix + '"' + process.env.APP_VERSION + '"');
-
-          // Put the release keystore into the same android block as the app configuration.
-          if (!gradle.includes('atbinyarRelease')) {
-            const androidBlock = /android\\s*\\{/;
-            if (!androidBlock.test(gradle)) throw new Error('Android Gradle block not found');
-            const signing = `
-              signingConfigs {
-                  atbinyarRelease {
-                      storeFile file(System.getenv("ANDROID_KEYSTORE_PATH"))
-                      storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
-                      keyAlias System.getenv("ANDROID_KEY_ALIAS")
-                      keyPassword System.getenv("ANDROID_KEY_PASSWORD")
-                  }
-              }
-          `;
-            gradle = gradle.replace(androidBlock, match => match + signing);
-          }
-
-          const releaseBlock = /(buildTypes\\s*\\{\\s*release\\s*\\{)/;
-          if (!releaseBlock.test(gradle)) throw new Error('Release buildType not found');
-
-          const releaseStart = gradle.search(releaseBlock);
-          const releaseTail = gradle.slice(releaseStart);
-          const signingLine = /^\\s*signingConfig\\s+signingConfigs\\.\\w+\\s*$/m;
-          if (signingLine.test(releaseTail)) {
-            const prefix = gradle.slice(0, releaseStart);
-            gradle = prefix + releaseTail.replace(signingLine, '            signingConfig signingConfigs.atbinyarRelease');
+          // Place a dedicated signing config before buildTypes inside android{}.
+          const signingStart = gradleLines.findIndex(line => line.trim() === 'signingConfigs {');
+          if (signingStart < 0) {
+            gradleLines.splice(buildTypesIndex, 0,
+              '    signingConfigs {',
+              '        atbinyarRelease {',
+              '            storeFile file(System.getenv("ANDROID_KEYSTORE_PATH"))',
+              '            storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")',
+              '            keyAlias System.getenv("ANDROID_KEY_ALIAS")',
+              '            keyPassword System.getenv("ANDROID_KEY_PASSWORD")',
+              '        }',
+              '    }'
+            );
           } else {
-            gradle = gradle.replace(releaseBlock, '$1\\n            signingConfig signingConfigs.atbinyarRelease');
+            // Add the dedicated entry inside the existing signingConfigs block.
+            let depth = 0, closeIndex = -1;
+            for (let i = signingStart; i < gradleLines.length; i++) {
+              depth += (gradleLines[i].match(/{/g) || []).length;
+              depth -= (gradleLines[i].match(/}/g) || []).length;
+              if (i > signingStart && depth === 0) { closeIndex = i; break; }
+            }
+            if (closeIndex < 0) throw new Error('Unclosed signingConfigs block.');
+            const already = gradleLines.slice(signingStart, closeIndex + 1).some(line => line.trim() === 'atbinyarRelease {');
+            if (!already) gradleLines.splice(closeIndex, 0,
+              '        atbinyarRelease {',
+              '            storeFile file(System.getenv("ANDROID_KEYSTORE_PATH"))',
+              '            storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")',
+              '            keyAlias System.getenv("ANDROID_KEY_ALIAS")',
+              '            keyPassword System.getenv("ANDROID_KEY_PASSWORD")',
+              '        }'
+            );
           }
 
-          if (!gradle.includes('signingConfig signingConfigs.atbinyarRelease')) {
-            throw new Error('Failed to apply AtbinYar release signing configuration');
+          // Re-find buildTypes/release after any inserted lines, then set the signing config.
+          const bt = gradleLines.findIndex(line => line.trim() === 'buildTypes {');
+          let rel = -1;
+          for (let i = bt + 1; i < gradleLines.length; i++) { if (gradleLines[i].trim() === 'release {') { rel = i; break; } }
+          if (rel < 0) throw new Error('release build type disappeared during configuration.');
+          let releaseClose = -1, depth = 0;
+          for (let i = rel; i < gradleLines.length; i++) {
+            depth += (gradleLines[i].match(/{/g) || []).length;
+            depth -= (gradleLines[i].match(/}/g) || []).length;
+            if (i > rel && depth === 0) { releaseClose = i; break; }
           }
+          if (releaseClose < 0) throw new Error('Unclosed release build type.');
+          const signingLine = '            signingConfig signingConfigs.atbinyarRelease';
+          const oldSigning = gradleLines.findIndex((line, i) => i > rel && i < releaseClose && line.trim().startsWith('signingConfig '));
+          if (oldSigning >= 0) gradleLines[oldSigning] = signingLine;
+          else gradleLines.splice(releaseClose, 0, signingLine);
 
-          fs.writeFileSync(file, gradle);
-          console.log('Configured AtbinYar Android release ' + process.env.APP_VERSION + ' (versionCode ' + versionCode + ')');
+          fs.writeFileSync(file, gradleLines.join('\n'));
+          console.log('Configured Android release ' + process.env.APP_VERSION + ' / versionCode ' + versionCode);
           NODE
       - name: Build APK and AAB
         working-directory: android

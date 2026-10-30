@@ -51,7 +51,9 @@
       "package.json",
       "atbinyar-primecount-api.js",
       "primecount-worker.js",
-      "THIRD_PARTY_LICENSES/primecount-COPYING.txt"
+      "THIRD_PARTY_LICENSES/primecount-COPYING.txt",
+      "icon_maskable_512.png",
+      "favicon.png"
     ],
     "publish": [
       {

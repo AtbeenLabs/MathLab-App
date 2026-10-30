@@ -242,7 +242,7 @@ jobs:
           fi
           APK_INFO="$("$APKSIGNER" verify --print-certs "$APK")"
           printf '%s\\n' "$APK_INFO"
-          CERT_DIGEST="$(printf '%s\\n' "$APK_INFO" | awk '/Signer #1 certificate SHA-256 digest/ {print $NF}' | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          CERT_DIGEST="$(printf '%s\\n' "$APK_INFO" | awk '/certificate SHA-256 digest:/ {print $NF; exit}' | tr -d ':' | tr '[:upper:]' '[:lower:]')"
           EXPECTED_DIGEST="7f9978ade037b7119d411b438f733a3770d1b88af1ac145f8abafbfa69f64b41"
           echo "Built APK SHA-256 signer: ${CERT_DIGEST:-not detected}"
           if [ "$CERT_DIGEST" != "$EXPECTED_DIGEST" ]; then

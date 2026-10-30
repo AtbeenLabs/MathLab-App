@@ -1,0 +1,206 @@
+name: AtbinYar - Build and Release All Platforms
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: atbinyar-release-main
+  cancel-in-progress: true
+
+jobs:
+  version:
+    name: Version the source
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      commit: ${{ steps.bump.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Bump minor version and create tag
+        id: bump
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          NEW_VERSION="${MAJOR}.$((MINOR + 1)).0"
+          while git rev-parse -q --verify "refs/tags/v$NEW_VERSION" >/dev/null; do
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$NEW_VERSION"
+            NEW_VERSION="${MAJOR}.$((MINOR + 1)).0"
+          done
+
+          node - "$NEW_VERSION" <<'NODE'
+          const fs = require('fs');
+          const version = process.argv[2];
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          pkg.version = version;
+          fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          NODE
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json
+          git commit -m "chore(release): v$NEW_VERSION"
+          git tag "v$NEW_VERSION"
+          git push origin "HEAD:${GITHUB_REF_NAME}" "v$NEW_VERSION"
+
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  windows:
+    name: Windows installer
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Build Windows
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run build:win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/*.exe
+            dist/*.blockmap
+            dist/latest.yml
+          if-no-files-found: error
+
+  linux:
+    name: Linux packages
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Build Linux
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run build:linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            dist/*.deb
+            dist/*.AppImage
+            dist/*.blockmap
+            dist/latest-linux.yml
+          if-no-files-found: error
+
+  android:
+    name: Signed Android APK and AAB
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Install Node dependencies
+        run: npm install
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools,platforms;android-36,build-tools;36.0.0'
+      - name: Prepare web app
+        run: |
+          mkdir -p www
+          cp index.html manifest.json icon_192x192.png icon_512x512.png logo.png www/
+      - name: Add Android platform
+        run: npx cap add android
+      - name: Configure signing and version
+        env:
+          APP_VERSION: ${{ needs.version.outputs.version }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing secret: $name"
+              exit 1
+            fi
+          done
+
+          KEYSTORE="$RUNNER_TEMP/atbinyar-signing-key.p12"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE"
+          echo "ANDROID_KEYSTORE_PATH=$KEYSTORE" >> "$GITHUB_ENV"
+          echo "ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "ANDROID_KEY_ALIAS=$ANDROID_KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "ANDROID_KEY_PASSWORD=$ANDROID_KEY_PASSWORD" >> "$GITHUB_ENV"
+
+          node <<'NODE'
+          const fs = require('fs');
+          const [major, minor, patch] = process.env.APP_VERSION.split('.').map(Number);
+          const versionCode = major * 10000 + minor * 100 + patch;
+          const file = 'android/app/build.gradle';
+          let gradle = fs.readFileSync(file, 'utf8');
+          gradle = gradle.replace(/^\s*versionCode\s+\d+\s*$/m, '        versionCode ' + versionCode);
+          gradle = gradle.replace(/^\s*versionName\s+["'][^"']+["']\s*$/m, '        versionName "' + process.env.APP_VERSION + '"');
+          if (!gradle.includes('versionCode ' + versionCode)) throw new Error('versionCode not found');
+          if (!gradle.includes('signingConfigs {')) {
+            gradle = gradle.replace(/android\s*\{/, match => match + '\n    signingConfigs {\n        release {\n            storeFile file(System.getenv("ANDROID_KEYSTORE_PATH"))\n            storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")\n            keyAlias System.getenv("ANDROID_KEY_ALIAS")\n            keyPassword System.getenv("ANDROID_KEY_PASSWORD")\n        }\n    }\n');
+          }
+          if (!gradle.includes('signingConfig signingConfigs.release')) {
+            gradle = gradle.replace(/(buildTypes\s*\{\s*release\s*\{)/, '$1\n            signingConfig signingConfigs.release');
+          }
+          fs.writeFileSync(file, gradle);
+          NODE
+      - name: Build APK and AAB
+        working-directory: android
+        run: ./gradlew --no-daemon assembleRelease bundleRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: |
+            android/app/build/outputs/apk/release/*.apk
+            android/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error
+
+  release:
+    name: Publish one combined release
+    needs: [version, windows, linux, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          gh release create "v$VERSION" release-assets/**/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "AtbinYar v$VERSION" \
+            --notes "Automated release from MathLab-App main."

@@ -75,7 +75,7 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json logo.png icon_192x192.png icon_512x512.png scripts/process-brand-assets.py manifest.json
+          git add package.json logo.png icon_192x192.png icon_512x512.png icon_maskable_512.png favicon.png scripts/process-brand-assets.py manifest.json
           git commit -m "chore(release): v$NEW_VERSION"
           git tag "v$NEW_VERSION"
           git push origin "HEAD:${GITHUB_REF_NAME}" "v$NEW_VERSION"

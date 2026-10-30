@@ -3,6 +3,14 @@ name: AtbinYar - Build and Release All Platforms
 on:
   push:
     branches: [main]
+    paths:
+      - "index.html"
+      - "manifest.json"
+      - "icon_*.png"
+      - "logo.png"
+      - "package.json"
+      - "index.js"
+      - "capacitor.config.json"
   workflow_dispatch:
 
 permissions:
@@ -173,15 +181,24 @@ jobs:
           const file = 'android/app/build.gradle';
           let gradle = fs.readFileSync(file, 'utf8');
 
-          gradle = gradle.replace(/^\\s*versionCode\\s+\\d+\\s*$/m, '        versionCode ' + versionCode);
-          gradle = gradle.replace(/^\\s*versionName\\s+["'][^"']+["']\\s*$/m, '        versionName "' + process.env.APP_VERSION + '"');
+          // Capacitor/AGP templates differ: accept both Groovy and assignment syntax.
+          const versionCodePattern = /^(\\s*versionCode\\s*)=?\\s*\\d+\\s*$/m;
+          const versionNamePattern = /^(\\s*versionName\\s*)=?\\s*["'][^"']+["']\\s*$/m;
+          if (!versionCodePattern.test(gradle)) {
+            throw new Error('Could not find numeric versionCode in android/app/build.gradle');
+          }
+          if (!versionNamePattern.test(gradle)) {
+            throw new Error('Could not find versionName in android/app/build.gradle');
+          }
 
-          if (!gradle.includes('versionCode ' + versionCode)) throw new Error('versionCode not found');
-          if (!gradle.includes('versionName "' + process.env.APP_VERSION + '"')) throw new Error('versionName not found');
+          gradle = gradle.replace(versionCodePattern, (_, prefix) => prefix + versionCode);
+          gradle = gradle.replace(versionNamePattern, (_, prefix) => prefix + '"' + process.env.APP_VERSION + '"');
 
-          // Dedicated name prevents a template or debug config from taking precedence.
-          gradle += `
-          android {
+          // Put the release keystore into the same android block as the app configuration.
+          if (!gradle.includes('atbinyarRelease')) {
+            const androidBlock = /android\\s*\\{/;
+            if (!androidBlock.test(gradle)) throw new Error('Android Gradle block not found');
+            const signing = `
               signingConfigs {
                   atbinyarRelease {
                       storeFile file(System.getenv("ANDROID_KEYSTORE_PATH"))
@@ -190,15 +207,29 @@ jobs:
                       keyPassword System.getenv("ANDROID_KEY_PASSWORD")
                   }
               }
-              buildTypes {
-                  release {
-                      signingConfig signingConfigs.atbinyarRelease
-                  }
-              }
-          }
           `;
+            gradle = gradle.replace(androidBlock, match => match + signing);
+          }
+
+          const releaseBlock = /(buildTypes\\s*\\{\\s*release\\s*\\{)/;
+          if (!releaseBlock.test(gradle)) throw new Error('Release buildType not found');
+
+          const releaseStart = gradle.search(releaseBlock);
+          const releaseTail = gradle.slice(releaseStart);
+          const signingLine = /^\\s*signingConfig\\s+signingConfigs\\.\\w+\\s*$/m;
+          if (signingLine.test(releaseTail)) {
+            const prefix = gradle.slice(0, releaseStart);
+            gradle = prefix + releaseTail.replace(signingLine, '            signingConfig signingConfigs.atbinyarRelease');
+          } else {
+            gradle = gradle.replace(releaseBlock, '$1\\n            signingConfig signingConfigs.atbinyarRelease');
+          }
+
+          if (!gradle.includes('signingConfig signingConfigs.atbinyarRelease')) {
+            throw new Error('Failed to apply AtbinYar release signing configuration');
+          }
 
           fs.writeFileSync(file, gradle);
+          console.log('Configured AtbinYar Android release ' + process.env.APP_VERSION + ' (versionCode ' + versionCode + ')');
           NODE
       - name: Build APK and AAB
         working-directory: android

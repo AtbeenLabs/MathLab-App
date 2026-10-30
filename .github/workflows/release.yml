@@ -11,6 +11,7 @@ on:
       - "package.json"
       - "index.js"
       - "capacitor.config.json"
+      - ".github/workflows/release.yml"
   workflow_dispatch:
 
 permissions:
@@ -276,13 +277,23 @@ jobs:
           set -euo pipefail
           TAG="v$VERSION"
 
-          # Create a draft first so users never see a half-uploaded release.
-          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          # Look up releases through the collection endpoint: the tag endpoint
+          # does not return draft releases. This also makes retries idempotent.
+          RELEASES_API="repos/$GITHUB_REPOSITORY/releases?per_page=100"
+          RELEASE_ID="$(gh api "$RELEASES_API" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n 1 || true)"
+
+          if [ -z "$RELEASE_ID" ]; then
             gh release create "$TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --draft \
               --title "AtbinYar v$VERSION" \
               --notes "Automated release from MathLab-App main."
+            RELEASE_ID="$(gh api "$RELEASES_API" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n 1)"
+          fi
+
+          if [ -z "$RELEASE_ID" ]; then
+            echo "::error::Could not find or create the GitHub Release for $TAG."
+            exit 1
           fi
 
           # Upload files only; artifact folders themselves must not be passed to gh.
@@ -292,15 +303,27 @@ jobs:
             exit 1
           fi
 
-          printf 'Uploading %s release files:\n' "${#ASSETS[@]}"
+          printf 'Uploading %s release files to release ID %s:\n' "${#ASSETS[@]}" "$RELEASE_ID"
           printf ' - %s\n' "${ASSETS[@]}"
           gh release upload "$TAG" "${ASSETS[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
 
-          # Publish only after every platform's files have uploaded successfully.
-          RELEASE_ID="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .id)"
-          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
-            -F draft=false >/dev/null
+          # Verify every expected asset is present before making the release public.
+          ASSET_JSON="$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?per_page=100")"
+          for ASSET_PATH in "${ASSETS[@]}"; do
+            ASSET_NAME="${ASSET_PATH##*/}"
+            if ! jq -e --arg name "$ASSET_NAME" '[.[] | select(.name == $name)] | length == 1' <<< "$ASSET_JSON" >/dev/null; then
+              echo "::error::Release asset missing or duplicated: $ASSET_NAME"
+              exit 1
+            fi
+          done
 
-          echo "Published AtbinYar $TAG with ${#ASSETS[@]} assets."
+          # Publish only after all platform files pass verification.
+          IS_DRAFT="$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq .draft)"
+          if [ "$IS_DRAFT" = "true" ]; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+              -F draft=false >/dev/null
+          fi
+
+          echo "Published AtbinYar $TAG with ${#ASSETS[@]} verified assets."

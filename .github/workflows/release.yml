@@ -259,6 +259,20 @@ jobs:
       - name: Build APK and AAB
         working-directory: android
         run: ./gradlew --no-daemon assembleRelease bundleRelease
+
+      - name: Export Android packages with unified filenames
+        env:
+          APP_VERSION: ${{ needs.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+          AAB="android/app/build/outputs/bundle/release/app-release.aab"
+          test -f "$APK"
+          test -f "$AAB"
+          cp "$APK" "android/AtbinYar_v${APP_VERSION}.apk"
+          cp "$AAB" "android/AtbinYar_v${APP_VERSION}.aab"
+          echo "Prepared Android packages: AtbinYar_v${APP_VERSION}.apk and .aab"
       - name: Verify APK signing certificate
         shell: bash
         run: |
@@ -289,8 +303,8 @@ jobs:
         with:
           name: android
           path: |
-            android/app/build/outputs/apk/release/*.apk
-            android/app/build/outputs/bundle/release/*.aab
+            android/AtbinYar_v*.apk
+            android/AtbinYar_v*.aab
           if-no-files-found: error
 
   release:
@@ -363,6 +377,19 @@ jobs:
             ASSET_NAME="${ASSET_NAME// /.}"
             if ! jq -e --arg name "$ASSET_NAME" '[.[] | select(.name == $name)] | length == 1' <<< "$ASSET_JSON" >/dev/null; then
               echo "::error::Release asset missing or duplicated: $ASSET_NAME"
+              exit 1
+            fi
+          done
+
+          # Enforce one public naming convention for every installable package.
+          for EXPECTED_NAME in \
+            "AtbinYar_v${VERSION}.exe" \
+            "AtbinYar_v${VERSION}.apk" \
+            "AtbinYar_v${VERSION}.aab" \
+            "AtbinYar_v${VERSION}.deb" \
+            "AtbinYar_v${VERSION}.AppImage"; do
+            if ! jq -e --arg name "$EXPECTED_NAME" '[.[] | select(.name == $name)] | length == 1' <<< "$ASSET_JSON" >/dev/null; then
+              echo "::error::Expected standardized release asset missing: $EXPECTED_NAME"
               exit 1
             fi
           done

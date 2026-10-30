@@ -331,7 +331,7 @@ jobs:
       - name: Prepare web app
         run: |
           mkdir -p www/THIRD_PARTY_LICENSES
-          cp index.html manifest.json icon_192x192.png icon_512x512.png logo.png atbinyar-primecount-api.js primecount-worker.js www/
+          cp index.html manifest.json icon_192x192.png icon_512x512.png icon_maskable_512.png favicon.png logo.png atbinyar-primecount-api.js primecount-worker.js www/
           cp THIRD_PARTY_LICENSES/primecount-COPYING.txt www/THIRD_PARTY_LICENSES/
       - name: Add Android platform
         run: npx cap add android

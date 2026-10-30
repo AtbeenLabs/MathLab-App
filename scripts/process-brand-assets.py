@@ -66,12 +66,11 @@ def process(path: Path) -> None:
                         queue.append(ni)
 
     removed = sum(1 for i, value in enumerate(white) if value == 2 and pixels[i][3] > 0)
-    if removed < 20:
-        # A fully transparent source is already processed; an opaque source
-        # without a white matte is not silently modified.
+    if removed == 0:
+        # A fully transparent source with no connected white pixels is already clean.
         corners = [pixels[0][3], pixels[width - 1][3], pixels[-width][3], pixels[-1][3]]
         if all(alpha == 0 for alpha in corners):
-            print(f"{path}: already transparent; no matte found")
+            print(f"{path}: already clean; no connected white matte found")
             return
         raise RuntimeError(f"{path}: no connected white outer matte found; refusing destructive edits")
 

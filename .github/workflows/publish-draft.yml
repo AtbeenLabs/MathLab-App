@@ -1,4 +1,4 @@
-name: Publish AtbinYar Draft Release
+name: Rescue and publish AtbinYar v1.11.0
 
 on:
   push:
@@ -8,30 +8,56 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: write
 
 jobs:
-  publish:
-    name: Publish uploaded AtbinYar release
+  rescue:
+    name: Upload verified v1.11.0 artifacts and publish
     runs-on: ubuntu-latest
     steps:
-      - name: Publish the newest fully uploaded draft
+      - name: Download the successful platform build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: 41045504468
+          path: release-assets
+
+      - name: Verify and publish v1.11.0
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
+          TAG="v1.11.0"
+          RELEASE_ID="428935218"
 
-          DRAFT_ID="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-            --jq '[.[] | select(.draft == true)] | sort_by(.created_at) | last | .id // empty')"
-
-          if [ -z "$DRAFT_ID" ]; then
-            echo "::error::No draft release was found."
+          RELEASE_JSON="$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")"
+          ACTUAL_TAG="$(jq -r '.tag_name' <<< "$RELEASE_JSON")"
+          IS_DRAFT="$(jq -r '.draft' <<< "$RELEASE_JSON")"
+          if [ "$ACTUAL_TAG" != "$TAG" ] || [ "$IS_DRAFT" != "true" ]; then
+            echo "::error::The verified draft release does not match $TAG."
             exit 1
           fi
 
-          echo "Publishing draft release ID $DRAFT_ID"
-          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$DRAFT_ID" \
-            -F draft=false
+          mapfile -d '' -t ASSETS < <(find release-assets -type f -print0)
+          if [ "${#ASSETS[@]}" -ne 8 ]; then
+            echo "::error::Expected 8 platform assets, found ${#ASSETS[@]}."
+            find release-assets -type f -print
+            exit 1
+          fi
 
-          echo "Draft release successfully published."
+          gh release upload "$TAG" "${ASSETS[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+
+          ASSET_JSON="$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?per_page=100")"
+          for ASSET_PATH in "${ASSETS[@]}"; do
+            ASSET_NAME="${ASSET_PATH##*/}"
+            if ! jq -e --arg name "$ASSET_NAME" '[.[] | select(.name == $name)] | length == 1' <<< "$ASSET_JSON" >/dev/null; then
+              echo "::error::Missing release asset: $ASSET_NAME"
+              exit 1
+            fi
+          done
+
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F draft=false >/dev/null
+          echo "Published $TAG with 8 verified assets."

@@ -1040,8 +1040,8 @@ function countPrimesUpTo(N){
     }
     result = c;
   } else {
-    result = Math.round(N / (Math.log(N) - 1));
-  }
+  result = Math.round(N / (Math.log(N) - 1));
+}
   primeCountCache.set(N, result);
   return result;
 }
@@ -1215,7 +1215,9 @@ async function renderSieveWindow(){
   await st(500);
   if (!alive()) return;
 
-  const small = [2,3,5,7,11,13,17,19,23,29,31];
+  const small = getBasePrimes(
+  Math.floor(Math.sqrt(viewEnd))
+  );
   for (const p of small){
     if (!alive()) return;
 
@@ -1764,13 +1766,17 @@ async function runLCMExtraction(a, b, alive){
   }
   await sleep(300); if (!alive()) return;
 
-  const lcm = lcmList.reduce((acc, x) => acc * x, 1);
+  const lcm = lcmList.reduce(
+  (acc, x) => acc * BigInt(x),
+  1n
+);
   if (lcmList.length === 0){
     formula.innerHTML = '<span class="f-eq">ک.م.م = </span><span class="f-result">۱</span>';
   } else {
     const fh = lcmList.map(p => `<span class="f-factor">${fa(p)}</span>`).join('<span class="f-op">×</span>');
     formula.innerHTML = `${fh}<span class="f-eq">=</span><span class="f-result" id="lcmResultNum">۰</span>`;
-    await animateNumberCount(document.getElementById('lcmResultNum'), lcm, 800);
+    const resultEl = document.getElementById('lcmResultNum');
+    resultEl.textContent = lcm.toLocaleString('fa-IR');
   }
 }
 async function runGCDLCM(){
@@ -1826,7 +1832,12 @@ function digitStats(n){
 }
 function isSquare(n){ const r = Math.round(Math.sqrt(n)); return r * r === n; }
 function isCube(n){ const r = Math.round(Math.cbrt(n)); return r * r * r === n; }
-function isPowerOf2(n){ return n > 0 && (n & (n - 1)) === 0; }
+function isPowerOf2(n) {
+  if (!Number.isSafeInteger(n) || n <= 0) return false;
+
+  const b = BigInt(n);
+  return (b & (b - 1n)) === 0n;
+}
 
 function replayAnim(el, name, dur, delay){
   if (!el || reduceMotion) return;
@@ -1963,9 +1974,6 @@ $('#anInput').addEventListener('keydown', e => { if (e.key === 'Enter') runAnaly
     anTimer = setTimeout(runAnalysis, 400);
   });
 
-  requestAnimationFrame(() => {
-    if (currentTool === 'sieve') runSieve();
-  });
 })();
 
 })();

@@ -1,0 +1,37 @@
+name: Publish AtbinYar Draft Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/publish-draft.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Publish uploaded AtbinYar release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the newest fully uploaded draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          DRAFT_ID="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq '[.[] | select(.draft == true)] | sort_by(.created_at) | last | .id // empty')"
+
+          if [ -z "$DRAFT_ID" ]; then
+            echo "::error::No draft release was found."
+            exit 1
+          fi
+
+          echo "Publishing draft release ID $DRAFT_ID"
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$DRAFT_ID" \
+            -F draft=false
+
+          echo "Draft release successfully published."

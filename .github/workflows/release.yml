@@ -54,87 +54,7 @@ jobs:
           fi
           git reset --hard "$REMOTE_HEAD"
 
-          python -m pip install --disable-pip-version-check Pillow
-          python - <<'PY'
-          from collections import deque
-          from pathlib import Path
-          from PIL import Image
-
-          def remove_outer_white(path):
-              image = Image.open(path).convert("RGBA")
-              pixels = image.load()
-              width, height = image.size
-              total = width * height
-              candidates = bytearray(total)
-              for y in range(height):
-                  for x in range(width):
-                      r, g, b, a = pixels[x, y]
-                      if a == 0 or (a and min(r, g, b) >= 220 and max(r, g, b) - min(r, g, b) <= 55):
-                          candidates[y * width + x] = 1
-
-              background = bytearray(total)
-              queue = deque()
-              def add_if_background(x, y):
-                  index = y * width + x
-                  if candidates[index] and not background[index]:
-                      background[index] = 1
-                      queue.append(index)
-
-              for x in range(width):
-                  add_if_background(x, 0)
-                  add_if_background(x, height - 1)
-              for y in range(height):
-                  add_if_background(0, y)
-                  add_if_background(width - 1, y)
-              while queue:
-                  index = queue.popleft()
-                  x, y = index % width, index // width
-                  for dy in (-1, 0, 1):
-                      for dx in (-1, 0, 1):
-                          if dx or dy:
-                              nx, ny = x + dx, y + dy
-                              if 0 <= nx < width and 0 <= ny < height:
-                                  add_if_background(nx, ny)
-
-              removed = sum(background)
-              if removed < 20:
-                  raise RuntimeError(f"{path}: expected white outer background, found only {removed} pixels")
-              output = image.copy()
-              out = output.load()
-              for index, is_background in enumerate(background):
-                  if not is_background:
-                      continue
-                  x, y = index % width, index // width
-                  r, g, b, old_alpha = pixels[x, y]
-                  neighbours = []
-                  for dy in (-1, 0, 1):
-                      for dx in (-1, 0, 1):
-                          if dx or dy:
-                              continue
-                          nx, ny = x + dx, y + dy
-                          if 0 <= nx < width and 0 <= ny < height and not background[ny * width + nx]:
-                              candidate = pixels[nx, ny]
-                              if candidate[3]:
-                                  neighbours.append(candidate)
-                  if not neighbours:
-                      out[x, y] = (r, g, b, 0)
-                      continue
-                  foreground = max(neighbours, key=lambda p: 255 - min(p[0], p[1], p[2]))
-                  ratios = []
-                  for observed, colour in zip((r, g, b), foreground[:3]):
-                      denominator = 255 - colour
-                      if denominator >= 12:
-                          ratios.append(max(0.0, min(1.0, (255 - observed) / denominator)))
-                  coverage = sorted(ratios)[len(ratios) // 2] if ratios else 0.0
-                  alpha = round(255 * coverage * foreground[3] / 255)
-                  out[x, y] = (*foreground[:3], alpha)
-              output.save(path, format="PNG", optimize=True)
-              print(f"{path}: removed {removed} connected background pixels; saved RGBA {width}x{height}")
-
-          for path in (Path("logo.png"), Path("icon_192x192.png"), Path("icon_512x512.png")):
-              if path.exists():
-                  remove_outer_white(path)
-          PY
+          python scripts/process-brand-assets.py
 
           VERSION="$(node -p "require('./package.json').version")"
           IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
@@ -154,7 +74,7 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json logo.png icon_192x192.png icon_512x512.png
+          git add package.json logo.png icon_192x192.png icon_512x512.png scripts/process-brand-assets.py manifest.json
           git commit -m "chore(release): v$NEW_VERSION"
           git tag "v$NEW_VERSION"
           git push origin "HEAD:${GITHUB_REF_NAME}" "v$NEW_VERSION"

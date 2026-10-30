@@ -1206,14 +1206,22 @@ tabs.forEach(t => t.onclick = () => showTool(t.dataset.tool));
 
 const countUpFrames = new WeakMap();
 
-function countUp(el, target, dur) {
+function stopCountUp(el) {
   if (!el) return;
 
   const previousFrame = countUpFrames.get(el);
-
   if (previousFrame !== undefined) {
     cancelAnimationFrame(previousFrame);
   }
+
+  countUpFrames.delete(el);
+}
+
+function countUp(el, target, dur) {
+  if (!el) return;
+
+  // Cancel any previous animation before starting a newer result.
+  stopCountUp(el);
 
   const startTime = performance.now();
 
@@ -1626,6 +1634,7 @@ async function runDivisors(){
 
   if (!n){
     list.innerHTML = '';
+    ['#divTotal','#divEven','#divOdd'].forEach(s => stopCountUp($(s)));
     ['#divTotal','#divEven','#divOdd','#divSigma','#divFactor'].forEach(s => {
       const el = $(s); if (el) el.textContent = '—';
     });
@@ -1648,6 +1657,9 @@ async function runDivisors(){
   }
 
   if (n === 1){
+    // Stop count-up animations from the previous number so they cannot
+    // overwrite the exact divisor counts for 1 after this branch returns.
+    ['#divTotal','#divEven','#divOdd'].forEach(s => stopCountUp($(s)));
     $('#divTotal').textContent = '۱';
     $('#divEven').textContent = '۰';
     $('#divOdd').textContent = '۱';

@@ -820,8 +820,13 @@ footer b{color:var(--ink);font-weight:900;border-bottom:2px solid var(--red);pad
 
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
-const fa = n => Number(n).toLocaleString('fa-IR', { useGrouping: false });
-const faG = n => Number(n).toLocaleString('fa-IR');
+const fa = n =>
+  (typeof n === 'bigint' ? n : Number(n))
+    .toLocaleString('fa-IR', { useGrouping: false });
+
+const faG = n =>
+  (typeof n === 'bigint' ? n : Number(n))
+    .toLocaleString('fa-IR');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const isTouch = matchMedia('(hover: none)').matches;
@@ -932,20 +937,43 @@ function factorizeBig(n){
   }
   return result;
 }
-function factorize(n){
+const factorCache = new Map();
+
+function factorize(n) {
   if (n < 2) return [];
-  if (n <= 1e12){
+
+  if (factorCache.has(n)) {
+    return factorCache.get(n);
+  }
+
+  let result;
+
+  if (n <= 1e12) {
     const out = [];
     let m = n;
-    for (let p = 2; p * p <= m; p += (p === 2 ? 1 : 2)){
+
+    for (let p = 2; p * p <= m; p += (p === 2 ? 1 : 2)) {
       let e = 0;
-      while (m % p === 0){ m /= p; e++; }
+
+      while (m % p === 0) {
+        m /= p;
+        e++;
+      }
+
       if (e) out.push([Number(p), e]);
     }
+
     if (m > 1) out.push([m, 1]);
-    return out;
+
+    result = out;
+  } else {
+    result = factorizeBig(BigInt(n)).map(
+      ([p, e]) => [Number(p), e]
+    );
   }
-  return factorizeBig(BigInt(n)).map(([p, e]) => [Number(p), e]);
+
+  factorCache.set(n, result);
+  return result;
 }
 function isPrime(n){
   if (n < 2) return false;
@@ -1013,19 +1041,37 @@ function flattenFactors(factors){
 }
 
 let baseCache = { limit: 0, primes: [] };
-function getBasePrimes(limit){
-  if (baseCache.limit >= limit) return baseCache.primes;
-  const newLimit = Math.max(limit, Math.min(3_000_000, Math.ceil(limit * 1.1)));
+
+function getBasePrimes(limit) {
+  limit = Math.max(1, Math.floor(limit));
+
+  if (baseCache.limit >= limit) {
+    return baseCache.primes.filter(p => p <= limit);
+  }
+
+  const newLimit = Math.max(
+    limit,
+    Math.min(3_000_000, Math.ceil(limit * 1.1))
+  );
+
   const sieve = new Uint8Array(newLimit + 1);
   const primes = [];
-  for (let i = 2; i <= newLimit; i++){
-    if (!sieve[i]){
+
+  for (let i = 2; i <= newLimit; i++) {
+    if (!sieve[i]) {
       primes.push(i);
-      if (i * i <= newLimit) for (let j = i * i; j <= newLimit; j += i) sieve[j] = 1;
+
+      if (i * i <= newLimit) {
+        for (let j = i * i; j <= newLimit; j += i) {
+          sieve[j] = 1;
+        }
+      }
     }
   }
+
   baseCache = { limit: newLimit, primes };
-  return primes;
+
+  return primes.filter(p => p <= limit);
 }
 const primeCountCache = new Map();
 function countPrimesUpTo(N){
@@ -1157,14 +1203,34 @@ function showTool(name, pushHash = true){
 }
 tabs.forEach(t => t.onclick = () => showTool(t.dataset.tool));
 
-function countUp(el, target, dur){
+const countUpFrames = new WeakMap();
+
+function countUp(el, target, dur) {
   if (!el) return;
-  const t0 = performance.now();
-  (function tick(now){
-    const k = Math.min(1, (now - t0) / (dur || 800));
-    el.textContent = faG(Math.round(target * (1 - Math.pow(1 - k, 3))));
-    if (k < 1) requestAnimationFrame(tick);
-  })(t0);
+
+  const previousFrame = countUpFrames.get(el);
+
+  if (previousFrame !== undefined) {
+    cancelAnimationFrame(previousFrame);
+  }
+
+  const startTime = performance.now();
+
+  function tick(now) {
+    const k = Math.min(1, (now - startTime) / (dur || 800));
+
+    el.textContent = faG(
+      Math.round(target * (1 - Math.pow(1 - k, 3)))
+    );
+
+    if (k < 1) {
+      countUpFrames.set(el, requestAnimationFrame(tick));
+    } else {
+      countUpFrames.delete(el);
+    }
+  }
+
+  countUpFrames.set(el, requestAnimationFrame(tick));
 }
 
 /* ============ SIEVE ============ */
@@ -1192,7 +1258,10 @@ async function renderSieveWindow(){
   sieveState.viewEnd = viewEnd;
 
   $('#sieveMax').textContent = fa(N);
-  $('#sieveTotal').textContent = faG(countPrimesUpTo(N));
+  const totalPrimes = countPrimesUpTo(N);
+
+$('#sieveTotal').textContent =
+  faG(totalPrimes) + (N > 5e7 ? ' (تقریبی)' : '');
 
   const grid = $('#sieveGrid');
   grid.innerHTML = '';
@@ -1215,9 +1284,16 @@ async function renderSieveWindow(){
   await st(500);
   if (!alive()) return;
 
-  const small = getBasePrimes(
+  const allBasePrimes = getBasePrimes(
   Math.floor(Math.sqrt(viewEnd))
-  );
+);
+
+const small = allBasePrimes.length <= 30
+  ? allBasePrimes
+  : [
+      ...allBasePrimes.slice(0, 20),
+      ...allBasePrimes.slice(-10)
+    ];
   for (const p of small){
     if (!alive()) return;
 
@@ -1270,14 +1346,17 @@ async function renderSieveWindow(){
     }
   }
 
-  $('#sieveStatus').innerHTML = 'در بازهٔ <b>' + fa(viewStart) + ' تا ' + fa(viewEnd) + '</b> — <b>' + faG(inWin) + ' عدد اول</b>' + (N > 5e7 ? ' (تعداد کل تقریبی)' : '');
+  $('#sieveStatus').innerHTML =
+  'در بازهٔ <b>' + fa(viewStart) + ' تا ' + fa(viewEnd) +
+  '</b> — <b>' + faG(inWin) + ' عدد اول</b>';
   updateSieveNav();
 }
 async function runSieve(){
   const inputEl = $('#sieveInput');
   const N = validateInput(inputEl, 2, 1e14);
   if (N === null){
-    $('#sieveGrid').innerHTML = '';
+  sieveState.token++;
+  $('#sieveGrid').innerHTML = '';
     $('#sieveStatus').innerHTML = 'یک عدد صحیح بین ۲ تا ۱۰<sup>۱۴</sup> وارد کن.';
     $('#sieveNav').hidden = true;
     return;
@@ -1315,19 +1394,27 @@ $$('.method-toggle[data-target="factor"] .method-btn').forEach(btn => {
   };
 });
 
-function buildTree(n){
-  if (n < 2) return { v: n, leaf: true, isPrime: false };
-  const p = smallestPrime(n);
-  if (p === n) return { v: n, leaf: true, isPrime: true };
-  return { v: n, left: { v: p, leaf: true, isPrime: true }, right: buildTree(n / p) };
-}
-function getAllNodes(root){
-  const out = [];
-  (function walk(n){ out.push(n); if (!n.leaf){ walk(n.left); walk(n.right); } })(root);
-  return out;
+function buildTree(n, flatFactors) {
+  if (n < 2) {
+    return { v: n, leaf: true, isPrime: false };
+  }
+
+  if (flatFactors.length === 1) {
+    return { v: n, leaf: true, isPrime: true };
+  }
+
+  const p = flatFactors[0];
+
+  return {
+    v: n,
+    left: { v: p, leaf: true, isPrime: true },
+    right: buildTree(n / p, flatFactors.slice(1))
+  };
 }
 
-async function drawTree(n, container, alive, statusEl){
+async function drawTree(
+  n, container, alive, statusEl, factors = factorize(n)
+){
   container.innerHTML = '';
   if (n === 1){
     container.innerHTML = '<p class="status" style="margin:0;padding:40px 0">عدد ۱ عامل اول ندارد.</p>';
@@ -1337,7 +1424,7 @@ async function drawTree(n, container, alive, statusEl){
     container.innerHTML = '<p class="status" style="margin:0;padding:40px 0">—</p>';
     return;
   }
-  const rootNode = buildTree(n);
+  const rootNode = buildTree(n, flattenFactors(factors));
   const NODE_MIN_W = 64, NODE_H = 42, H_GAP = 26, V_GAP = 66;
   let leafCount = 0;
   (function count(nd){ if (nd.leaf){ leafCount++; return; } count(nd.left); count(nd.right); })(rootNode);
@@ -1417,7 +1504,9 @@ async function drawTree(n, container, alive, statusEl){
   }
 }
 
-async function drawColumn(n, container, alive, statusEl){
+async function drawColumn(
+  n, container, alive, statusEl, factors = factorize(n)
+){
   container.innerHTML = '';
   if (n === 1){
     container.innerHTML = '<p class="status" style="margin:0;padding:40px 0">عدد ۱ عامل اول ندارد.</p>';
@@ -1429,10 +1518,11 @@ async function drawColumn(n, container, alive, statusEl){
   }
   const steps = [];
   let m = n;
-  for (let p = 2; p * p <= m; p += (p === 2 ? 1 : 2)){
-    while (m % p === 0){ steps.push({ value: m, divisor: p }); m /= p; }
+  
+  for (const p of flattenFactors(factors)) {
+    steps.push({ value: m, divisor: p });
+    m /= p;
   }
-  if (m > 1) steps.push({ value: m, divisor: m });
   const ladder = document.createElement('div');
   ladder.className = 'ladder';
   const rows = [];
@@ -1450,8 +1540,8 @@ async function drawColumn(n, container, alive, statusEl){
   rows.push(fin);
   container.appendChild(ladder);
   if (statusEl){
-    const f = factorize(n);
-    statusEl.innerHTML = 'تجزیه: ' + factorStringHTML(f);
+    statusEl.innerHTML =
+    'تجزیه: ' + factorStringHTML(factors);
   }
   for (const row of rows){
     if (!alive()) return;
@@ -1473,11 +1563,17 @@ async function runFactor(){
     return;
   }
   status.innerHTML = 'در حال تجزیه...';
-  const method = factorState.method;
-  if (method === 'column') await drawColumn(n, stage, alive, status);
-  else await drawTree(n, stage, alive, status);
-  if (!alive()) return;
-  const f = factorize(n);
+
+const method = factorState.method;
+const f = factorize(n);
+
+if (method === 'column') {
+  await drawColumn(n, stage, alive, status, f);
+} else {
+  await drawTree(n, stage, alive, status, f);
+}
+
+if (!alive()) return;
   result.innerHTML = '';
   f.forEach(([p, e], idx) => {
     if (idx > 0){
@@ -1550,12 +1646,12 @@ async function runDivisors(){
   const all = divisorsOf(f);
   const even = all.filter(d => d % 2 === 0).length;
   const odd = all.length - even;
-  const sigmaNum = Number(sigmaOf(f));
+  const sigmaNum = sigmaOf(f);
 
   countUp($('#divTotal'), all.length, 700);
   countUp($('#divEven'), even, 700);
   countUp($('#divOdd'), odd, 700);
-  countUp($('#divSigma'), sigmaNum, 900);
+  $('#divSigma').textContent = faG(sigmaNum);
   $('#divFactor').innerHTML = factorStringHTML(f);
 
   list.innerHTML = '';

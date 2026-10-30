@@ -168,11 +168,15 @@ jobs:
           npx capacitor-assets generate --android --iconBackgroundColor '#04060f' --iconBackgroundColorDark '#04060f' --splashBackgroundColor '#04060f' --splashBackgroundColorDark '#04060f'
           APP_MANIFEST="android/app/src/main/AndroidManifest.xml"
           grep -q 'android:icon="@mipmap/ic_launcher"' "$APP_MANIFEST"
-          if ! find android/app/src/main/res -type f \\( -name 'ic_launcher*.png' -o -name 'ic_launcher*.xml' \\) -print -quit | grep -q .; then
-            echo "::error::Android launcher icon resources were not generated."
+          if ! test -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml; then
+            echo "::error::Android adaptive launcher icon XML was not generated."
             exit 1
           fi
-          echo "Android launcher icon resources are present."
+          if ! find android/app/src/main/res -type f -name 'ic_launcher*.png' -print -quit | grep -q .; then
+            echo "::error::Android legacy launcher PNG icons were not generated."
+            exit 1
+          fi
+          echo "Android adaptive and legacy launcher icon resources are present."
       - name: Configure signing and version
         env:
           APP_VERSION: ${{ needs.version.outputs.version }}

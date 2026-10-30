@@ -39,6 +39,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          # The push event SHA may be older than main if another workflow committed
+          # while this run was queued. Continue from the latest remote main to avoid
+          # non-fast-forward pushes or resurrecting deleted workflow files.
+          git fetch origin "$GITHUB_REF_NAME"
+          REMOTE_HEAD="$(git rev-parse FETCH_HEAD)"
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "$REMOTE_HEAD"; then
+            echo "::error::The triggering commit is no longer an ancestor of the remote branch."
+            exit 1
+          fi
+          git reset --hard "$REMOTE_HEAD"
+
           VERSION="$(node -p "require('./package.json').version")"
           IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
           NEW_VERSION="${MAJOR}.$((MINOR + 1)).0"

@@ -1,0 +1,76 @@
+{
+  "name": "atbinyar",
+  "version": "1.2.0",
+  "description": "AtbinYar - Math Lab",
+  "main": "index.js",
+  "private": true,
+  "author": {
+    "name": "Atbin Omidi",
+    "email": "atbeenn@gmail.com"
+  },
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AtbeenLabs/MathLab-App.git"
+  },
+  "homepage": "https://github.com/AtbeenLabs/MathLab-App",
+  "scripts": {
+    "start": "electron .",
+    "build:win": "electron-builder --win --publish never",
+    "build:linux": "electron-builder --linux --publish never"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.11"
+  },
+  "devDependencies": {
+    "@capacitor/android": "8.6.0",
+    "@capacitor/cli": "8.6.0",
+    "@capacitor/core": "8.6.0",
+    "electron": "45.1.0",
+    "electron-builder": "24.13.3"
+  },
+  "build": {
+    "appId": "com.atbinyar.mathlab",
+    "productName": "AtbinYar",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "index.html",
+      "manifest.json",
+      "icon_192x192.png",
+      "icon_512x512.png",
+      "logo.png",
+      "index.js",
+      "package.json"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "AtbeenLabs",
+        "repo": "MathLab-App",
+        "releaseType": "release"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "icon_512x512.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Education",
+      "icon": "icon_512x512.png",
+      "maintainer": "Atbin Omidi <atbeenn@gmail.com>"
+    }
+  }
+}

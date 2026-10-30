@@ -5,6 +5,7 @@ import pngToIco from 'png-to-ico';
 
 const root = process.cwd();
 const source = path.join(root, 'icon_512x512.png');
+const platformSource = path.join(root, 'icon_maskable_512.png');
 const buildDir = path.join(root, 'build');
 const linuxIconsDir = path.join(buildDir, 'icons');
 const assetDir = path.join(root, 'assets');
@@ -31,15 +32,17 @@ async function ensureTransparentMaster(file) {
 
 await fs.access(source);
 await ensureTransparentMaster(source);
+await fs.access(platformSource);
 await fs.mkdir(linuxIconsDir, { recursive: true });
 await fs.mkdir(assetDir, { recursive: true });
 
 const master = sharp(source).ensureAlpha();
+const platformIcon = sharp(platformSource).ensureAlpha();
 
 // Linux hicolor assets all inherit the transparent master.
 const linuxSizes = [16, 24, 32, 48, 64, 96, 128, 256, 512];
 for (const size of linuxSizes) {
-  await master.clone().resize(size, size, { fit: 'contain' })
+  await platformIcon.clone().resize(size, size, { fit: 'contain' })
     .png().toFile(path.join(linuxIconsDir, `${size}x${size}.png`));
 }
 
@@ -48,7 +51,7 @@ const windowsSizes = [16, 24, 32, 48, 64, 128, 256];
 const icoInputs = [];
 for (const size of windowsSizes) {
   const output = path.join(buildDir, `icon-${size}.png`);
-  await master.clone().resize(size, size, { fit: 'contain' }).png().toFile(output);
+  await platformIcon.clone().resize(size, size, { fit: 'contain' }).png().toFile(output);
   icoInputs.push(output);
 }
 const ico = await pngToIco(icoInputs);

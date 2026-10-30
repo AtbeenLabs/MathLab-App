@@ -482,9 +482,21 @@ jobs:
     needs: [version, app-math-tests, primecount-wasm, windows, linux, android]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download Windows release artifacts
+        uses: actions/download-artifact@v4
         with:
-          path: release-assets
+          name: windows
+          path: release-assets/windows
+      - name: Download Linux release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux
+          path: release-assets/linux
+      - name: Download Android release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: android
+          path: release-assets/android
 
       - name: Publish GitHub Release
         env:

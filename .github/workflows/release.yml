@@ -128,7 +128,9 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: 'platform-tools,platforms;android-36,build-tools;36.0.0'
+          packages: 'platform-tools'
+      - name: Install Android SDK components
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
       - name: Prepare web app
         run: |
           mkdir -p www
@@ -159,6 +161,15 @@ jobs:
           echo "ANDROID_KEY_ALIAS=$ANDROID_KEY_ALIAS" >> "$GITHUB_ENV"
           echo "ANDROID_KEY_PASSWORD=$ANDROID_KEY_PASSWORD" >> "$GITHUB_ENV"
 
+          KEY_INFO="$(keytool -list -v -storetype PKCS12 -keystore "$KEYSTORE" -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS")"
+          printf '%s\n' "$KEY_INFO" | grep -q 'Entry type: PrivateKeyEntry'
+          CERT_DIGEST="$(printf '%s\n' "$KEY_INFO" | awk -F': ' '/SHA256:/ {print $2}' | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          EXPECTED_DIGEST="7f9978ade037b7119d411b438f733a3770d1b88af1ac145f8abafbfa69f64b41"
+          if [ "$CERT_DIGEST" != "$EXPECTED_DIGEST" ]; then
+            echo "::error::The uploaded P12 does not match the signing certificate of the current APK."
+            exit 1
+          fi
+
           node <<'NODE'
           const fs = require('fs');
           const [major, minor, patch] = process.env.APP_VERSION.split('.').map(Number);
@@ -179,6 +190,19 @@ jobs:
       - name: Build APK and AAB
         working-directory: android
         run: ./gradlew --no-daemon assembleRelease bundleRelease
+      - name: Verify APK signing certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find android/app/build/outputs/apk/release -name '*.apk' -print -quit)"
+          test -n "$APK"
+          CERT_DIGEST="$(apksigner verify --print-certs "$APK" | awk -F': ' '/Signer #1 certificate SHA-256 digest/ {print $2}' | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          EXPECTED_DIGEST="7f9978ade037b7119d411b438f733a3770d1b88af1ac145f8abafbfa69f64b41"
+          if [ "$CERT_DIGEST" != "$EXPECTED_DIGEST" ]; then
+            echo "::error::Built APK certificate does not match the installed app's signing certificate."
+            exit 1
+          fi
+          echo "APK signature matches the existing AtbinYar signing certificate."
       - uses: actions/upload-artifact@v4
         with:
           name: android

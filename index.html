@@ -1413,6 +1413,24 @@ function buildTree(n, flatFactors) {
   };
 }
 
+function getAllNodes(root){
+  const nodes = [];
+  const stack = [root];
+
+  while (stack.length){
+    const node = stack.pop();
+    if (!node) continue;
+
+    nodes.push(node);
+    if (!node.leaf){
+      // Push right first so the left branch is visited first.
+      stack.push(node.right, node.left);
+    }
+  }
+
+  return nodes;
+}
+
 async function drawTree(
   n, container, alive, statusEl, factors = factorize(n)
 ){

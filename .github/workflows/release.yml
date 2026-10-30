@@ -210,7 +210,13 @@ jobs:
           test -s primecount-assets/atbinyar-primecount-api.js
           mkdir -p THIRD_PARTY_LICENSES
           cp primecount-assets/atbinyar-primecount-api.js .
-          cp primecount-assets/primecount-COPYING.txt THIRD_PARTY_LICENSES/primecount-COPYING.txt
+          LICENSE_FILE="$(find primecount-assets -type f -name 'primecount-COPYING.txt' -print -quit)"
+          if [ -z "$LICENSE_FILE" ]; then
+            echo "::error::primecount license file was not included in the WASM artifact."
+            find primecount-assets -maxdepth 4 -type f -print
+            exit 1
+          fi
+          cp "$LICENSE_FILE" THIRD_PARTY_LICENSES/primecount-COPYING.txt
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -249,7 +255,13 @@ jobs:
           test -s primecount-assets/atbinyar-primecount-api.js
           mkdir -p THIRD_PARTY_LICENSES
           cp primecount-assets/atbinyar-primecount-api.js .
-          cp primecount-assets/primecount-COPYING.txt THIRD_PARTY_LICENSES/primecount-COPYING.txt
+          LICENSE_FILE="$(find primecount-assets -type f -name 'primecount-COPYING.txt' -print -quit)"
+          if [ -z "$LICENSE_FILE" ]; then
+            echo "::error::primecount license file was not included in the WASM artifact."
+            find primecount-assets -maxdepth 4 -type f -print
+            exit 1
+          fi
+          cp "$LICENSE_FILE" THIRD_PARTY_LICENSES/primecount-COPYING.txt
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -289,7 +301,13 @@ jobs:
           test -s primecount-assets/atbinyar-primecount-api.js
           mkdir -p THIRD_PARTY_LICENSES
           cp primecount-assets/atbinyar-primecount-api.js .
-          cp primecount-assets/primecount-COPYING.txt THIRD_PARTY_LICENSES/primecount-COPYING.txt
+          LICENSE_FILE="$(find primecount-assets -type f -name 'primecount-COPYING.txt' -print -quit)"
+          if [ -z "$LICENSE_FILE" ]; then
+            echo "::error::primecount license file was not included in the WASM artifact."
+            find primecount-assets -maxdepth 4 -type f -print
+            exit 1
+          fi
+          cp "$LICENSE_FILE" THIRD_PARTY_LICENSES/primecount-COPYING.txt
       - uses: actions/setup-node@v4
         with:
           node-version: 22

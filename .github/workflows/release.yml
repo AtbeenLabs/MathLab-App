@@ -3,6 +3,9 @@ name: AtbinYar - Build and Release All Platforms
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - ".github/workflows/**"
+      - "README.md"
   workflow_dispatch:
 
 permissions:
@@ -172,15 +175,32 @@ jobs:
           const versionCode = major * 10000 + minor * 100 + patch;
           const file = 'android/app/build.gradle';
           let gradle = fs.readFileSync(file, 'utf8');
-          gradle = gradle.replace(/^\s*versionCode\s+\d+\s*$/m, '        versionCode ' + versionCode);
-          gradle = gradle.replace(/^\s*versionName\s+["'][^"']+["']\s*$/m, '        versionName "' + process.env.APP_VERSION + '"');
+
+          gradle = gradle.replace(/^\\s*versionCode\\s+\\d+\\s*$/m, '        versionCode ' + versionCode);
+          gradle = gradle.replace(/^\\s*versionName\\s+["'][^"']+["']\\s*$/m, '        versionName "' + process.env.APP_VERSION + '"');
+
           if (!gradle.includes('versionCode ' + versionCode)) throw new Error('versionCode not found');
-          if (!gradle.includes('signingConfigs {')) {
-            gradle = gradle.replace(/android\s*\{/, match => match + '\n    signingConfigs {\n        release {\n            storeFile file(System.getenv("ANDROID_KEYSTORE_PATH"))\n            storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")\n            keyAlias System.getenv("ANDROID_KEY_ALIAS")\n            keyPassword System.getenv("ANDROID_KEY_PASSWORD")\n        }\n    }\n');
+          if (!gradle.includes('versionName "' + process.env.APP_VERSION + '"')) throw new Error('versionName not found');
+
+          // Dedicated name prevents a template or debug config from taking precedence.
+          gradle += `
+          android {
+              signingConfigs {
+                  atbinyarRelease {
+                      storeFile file(System.getenv("ANDROID_KEYSTORE_PATH"))
+                      storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                      keyAlias System.getenv("ANDROID_KEY_ALIAS")
+                      keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+                  }
+              }
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.atbinyarRelease
+                  }
+              }
           }
-          if (!gradle.includes('signingConfig signingConfigs.release')) {
-            gradle = gradle.replace(/(buildTypes\s*\{\s*release\s*\{)/, '$1\n            signingConfig signingConfigs.release');
-          }
+          `;
+
           fs.writeFileSync(file, gradle);
           NODE
       - name: Build APK and AAB
@@ -202,10 +222,14 @@ jobs:
             echo "::error::apksigner was not found in Android SDK build-tools."
             exit 1
           fi
-          CERT_DIGEST="$("$APKSIGNER" verify --print-certs "$APK" | awk -F': ' '/Signer #1 certificate SHA-256 digest/ {print $2}' | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          APK_INFO="$("$APKSIGNER" verify --print-certs "$APK")"
+          printf '%s\\n' "$APK_INFO"
+          CERT_DIGEST="$(printf '%s\\n' "$APK_INFO" | awk '/Signer #1 certificate SHA-256 digest:/ {print $NF}' | tr -d ':' | tr '[:upper:]' '[:lower:]')"
           EXPECTED_DIGEST="7f9978ade037b7119d411b438f733a3770d1b88af1ac145f8abafbfa69f64b41"
+          echo "Built APK certificate SHA-256: ${CERT_DIGEST:-MISSING}"
+          echo "Expected certificate SHA-256: $EXPECTED_DIGEST"
           if [ "$CERT_DIGEST" != "$EXPECTED_DIGEST" ]; then
-            echo "::error::Built APK certificate does not match the installed app's signing certificate."
+            echo "::error::Built APK certificate does not match the current app's signing certificate."
             exit 1
           fi
           echo "APK signature matches the existing AtbinYar signing certificate."

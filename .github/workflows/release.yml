@@ -1,0 +1,591 @@
+name: AtbinYar - Build and Release All Platforms
+
+on:
+  repository_dispatch:
+    types: [atbinyar_private_source_updated]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: atbinyar-release-main
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: app
+
+jobs:
+  version:
+    name: Version the source
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      commit: ${{ steps.bump.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: AtbeenLabs/AtbeenYar-Source
+          ref: main
+          token: ${{ secrets.PRIVATE_SOURCE_TOKEN }}
+          fetch-depth: 0
+
+      - name: Bump minor version and create tag
+        id: bump
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # This workflow runs in the public release repository but checks out
+          # the private source repository. Its GITHUB_SHA belongs to the public
+          # repository, so always build from the latest private main branch.
+          SOURCE_BRANCH="main"
+          git fetch origin "$SOURCE_BRANCH"
+          REMOTE_HEAD="$(git rev-parse FETCH_HEAD)"
+          git reset --hard "$REMOTE_HEAD"
+
+          python -m pip install --disable-pip-version-check Pillow
+          python scripts/process-brand-assets.py
+
+          VERSION="$(node -p "require('./package.json').version")"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          NEW_VERSION="${MAJOR}.$((MINOR + 1)).0"
+          while git rev-parse -q --verify "refs/tags/v$NEW_VERSION" >/dev/null; do
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$NEW_VERSION"
+            NEW_VERSION="${MAJOR}.$((MINOR + 1)).0"
+          done
+
+          node - "$NEW_VERSION" <<'NODE'
+          const fs = require('fs');
+          const version = process.argv[2];
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          pkg.version = version;
+          fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          NODE
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json logo.png icon_192x192.png icon_512x512.png icon_maskable_512.png favicon.png scripts/process-brand-assets.py manifest.json
+          git commit -m "chore(release): v$NEW_VERSION"
+          git tag "v$NEW_VERSION"
+          git push origin "HEAD:main" "v$NEW_VERSION"
+
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  app-math-tests:
+    name: Test AtbinYar math core
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: AtbeenLabs/AtbeenYar-Source
+          ref: ${{ needs.version.outputs.commit }}
+          token: ${{ secrets.PRIVATE_SOURCE_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check inline JavaScript syntax
+        run: node scripts/check-inline-script.cjs index.html
+      - name: Test number theory functions
+        run: node scripts/test-app-math.cjs
+
+  primecount-wasm:
+    name: Build exact prime-count WASM engine
+    needs: [version, app-math-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: AtbeenLabs/AtbeenYar-Source
+          ref: ${{ needs.version.outputs.commit }}
+          token: ${{ secrets.PRIVATE_SOURCE_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: emscripten-core/setup-emsdk@v15
+        with:
+          version: 3.1.73
+          actions-cache-folder: emsdk-cache
+      - name: Fetch pinned primecount source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init primecount-src
+          git -C primecount-src remote add origin https://github.com/kimwalisch/primecount.git
+          git -C primecount-src fetch --depth 1 origin b40b54b35f25ba68a6492f7b738e051359c824ec
+          git -C primecount-src checkout --detach FETCH_HEAD
+      - name: Add AtbinYar C API wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > primecount-src/atbinyar_primecount_api.cpp <<'CPP'
+          #include <primecount.h>
+          #include <emscripten/emscripten.h>
+          #include <stdint.h>
+
+          extern "C" {
+          EMSCRIPTEN_KEEPALIVE int64_t atbinyar_prime_count(int64_t limit) {
+              if (limit < 0) return -1;
+              return primecount_pi(limit);
+          }
+          }
+
+          int main() {
+              return 0;
+          }
+          CPP
+
+          cat >> primecount-src/CMakeLists.txt <<'CMAKE'
+
+          # AtbinYar WebAssembly API backed by the upstream primecount C API.
+          add_executable(atbinyar_primecount_api atbinyar_primecount_api.cpp)
+          target_link_libraries(atbinyar_primecount_api PRIVATE primecount::primecount)
+          target_compile_features(atbinyar_primecount_api PRIVATE cxx_std_14)
+          target_link_options(atbinyar_primecount_api PRIVATE
+              "-sMODULARIZE=1"
+              "-sEXPORT_NAME=createAtbinYarPrimecountModule"
+              "-sEXPORTED_FUNCTIONS=['_main','_atbinyar_prime_count']"
+              "-sWASM_BIGINT=1"
+              "-sSINGLE_FILE=1"
+              "-sALLOW_MEMORY_GROWTH=1"
+              "-sENVIRONMENT=web,worker,node"
+          )
+          CMAKE
+      - name: Configure primecount for WebAssembly
+        run: |
+          emcmake cmake -S primecount-src -B primecount-src/build-wasm \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_PRIMECOUNT=OFF \
+            -DBUILD_STATIC_LIBS=ON \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_LIBPRIMESIEVE=ON \
+            -DWITH_OPENMP=OFF \
+            -DWITH_MULTIARCH=OFF \
+            -DWITH_FASTDIVIDER=OFF \
+            -DBUILD_TESTS=OFF
+      - name: Compile exact prime-count engine
+        run: cmake --build primecount-src/build-wasm --target atbinyar_primecount_api --parallel 2
+      - name: Prepare engine and license
+        shell: bash
+        run: |
+          set -euo pipefail
+          ENGINE="primecount-src/build-wasm/atbinyar_primecount_api.js"
+          test -s "$ENGINE"
+          cp "$ENGINE" atbinyar-primecount-api.js
+          mkdir -p THIRD_PARTY_LICENSES
+          cp primecount-src/COPYING THIRD_PARTY_LICENSES/primecount-COPYING.txt
+          node -e "const fs=require('fs'); const source=fs.readFileSync('atbinyar-primecount-api.js','utf8'); if (!source.includes('createAtbinYarPrimecountModule')) throw new Error('WASM module factory missing'); console.log('Exact prime-count WASM module prepared.');"
+      - name: Test exact prime-count reference values
+        run: node scripts/test-primecount-wasm.cjs ./atbinyar-primecount-api.js
+      - uses: actions/upload-artifact@v4
+        with:
+          name: primecount-wasm
+          path: |
+            app/atbinyar-primecount-api.js
+            app/THIRD_PARTY_LICENSES/primecount-COPYING.txt
+          if-no-files-found: error
+
+  windows:
+    name: Windows installer
+    needs: [version, primecount-wasm]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: AtbeenLabs/AtbeenYar-Source
+          ref: ${{ needs.version.outputs.commit }}
+          token: ${{ secrets.PRIVATE_SOURCE_TOKEN }}
+      - name: Download exact prime-count engine
+        uses: actions/download-artifact@v4
+        with:
+          name: primecount-wasm
+          path: app/primecount-assets
+      - name: Install exact prime-count engine and license
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s primecount-assets/atbinyar-primecount-api.js
+          mkdir -p THIRD_PARTY_LICENSES
+          cp primecount-assets/atbinyar-primecount-api.js .
+          LICENSE_FILE="$(find primecount-assets -type f -name 'primecount-COPYING.txt' -print -quit)"
+          if [ -z "$LICENSE_FILE" ]; then
+            echo "::error::primecount license file was not included in the WASM artifact."
+            find primecount-assets -maxdepth 4 -type f -print
+            exit 1
+          fi
+          cp "$LICENSE_FILE" THIRD_PARTY_LICENSES/primecount-COPYING.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Generate Windows and Linux icon assets
+        run: npm run build:icons
+      - name: Build Windows
+        run: npm run build:win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            app/dist/*.exe
+            app/dist/*.blockmap
+            app/dist/latest.yml
+          if-no-files-found: error
+
+  linux:
+    name: Linux packages
+    needs: [version, primecount-wasm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: AtbeenLabs/AtbeenYar-Source
+          ref: ${{ needs.version.outputs.commit }}
+          token: ${{ secrets.PRIVATE_SOURCE_TOKEN }}
+      - name: Download exact prime-count engine
+        uses: actions/download-artifact@v4
+        with:
+          name: primecount-wasm
+          path: app/primecount-assets
+      - name: Install exact prime-count engine and license
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s primecount-assets/atbinyar-primecount-api.js
+          mkdir -p THIRD_PARTY_LICENSES
+          cp primecount-assets/atbinyar-primecount-api.js .
+          LICENSE_FILE="$(find primecount-assets -type f -name 'primecount-COPYING.txt' -print -quit)"
+          if [ -z "$LICENSE_FILE" ]; then
+            echo "::error::primecount license file was not included in the WASM artifact."
+            find primecount-assets -maxdepth 4 -type f -print
+            exit 1
+          fi
+          cp "$LICENSE_FILE" THIRD_PARTY_LICENSES/primecount-COPYING.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install
+      - name: Generate Windows and Linux icon assets
+        run: npm run build:icons
+      - name: Build Linux
+        run: npm run build:linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            app/dist/*.deb
+            app/dist/*.AppImage
+            app/dist/*.blockmap
+            app/dist/latest-linux.yml
+          if-no-files-found: error
+
+  android:
+    name: Signed Android APK and AAB
+    needs: [version, primecount-wasm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: AtbeenLabs/AtbeenYar-Source
+          ref: ${{ needs.version.outputs.commit }}
+          token: ${{ secrets.PRIVATE_SOURCE_TOKEN }}
+      - name: Download exact prime-count engine
+        uses: actions/download-artifact@v4
+        with:
+          name: primecount-wasm
+          path: app/primecount-assets
+      - name: Install exact prime-count engine and license
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s primecount-assets/atbinyar-primecount-api.js
+          mkdir -p THIRD_PARTY_LICENSES
+          cp primecount-assets/atbinyar-primecount-api.js .
+          LICENSE_FILE="$(find primecount-assets -type f -name 'primecount-COPYING.txt' -print -quit)"
+          if [ -z "$LICENSE_FILE" ]; then
+            echo "::error::primecount license file was not included in the WASM artifact."
+            find primecount-assets -maxdepth 4 -type f -print
+            exit 1
+          fi
+          cp "$LICENSE_FILE" THIRD_PARTY_LICENSES/primecount-COPYING.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Install Node dependencies
+        run: npm install
+      - name: Generate icon source assets
+        run: npm run build:icons
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+      - name: Install Android SDK components
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - name: Prepare web app
+        run: |
+          mkdir -p www/THIRD_PARTY_LICENSES
+          cp index.html manifest.json icon_192x192.png icon_512x512.png icon_maskable_512.png favicon.png logo.png atbinyar-primecount-api.js primecount-worker.js www/
+          cp THIRD_PARTY_LICENSES/primecount-COPYING.txt www/THIRD_PARTY_LICENSES/
+      - name: Add Android platform
+        run: npx cap add android
+      - name: Generate Android launcher and adaptive icons
+        run: |
+          set -euo pipefail
+          npx capacitor-assets generate --android --iconBackgroundColor '#071321' --iconBackgroundColorDark '#071321' --splashBackgroundColor '#071321' --splashBackgroundColorDark '#071321'
+          APP_MANIFEST="android/app/src/main/AndroidManifest.xml"
+          grep -q 'android:icon="@mipmap/ic_launcher"' "$APP_MANIFEST"
+          if ! test -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml; then
+            echo "::error::Android adaptive launcher icon XML was not generated."
+            exit 1
+          fi
+          if ! find android/app/src/main/res -type f -name 'ic_launcher*.png' -print -quit | grep -q .; then
+            echo "::error::Android legacy launcher PNG icons were not generated."
+            exit 1
+          fi
+          echo "Android adaptive and legacy launcher icon resources are present."
+      - name: Configure signing and version
+        env:
+          APP_VERSION: ${{ needs.version.outputs.version }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing secret: $name"
+              exit 1
+            fi
+          done
+
+          KEYSTORE="$RUNNER_TEMP/atbinyar-signing-key.p12"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE"
+          echo "ANDROID_KEYSTORE_PATH=$KEYSTORE" >> "$GITHUB_ENV"
+          echo "ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "ANDROID_KEY_ALIAS=$ANDROID_KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "ANDROID_KEY_PASSWORD=$ANDROID_KEY_PASSWORD" >> "$GITHUB_ENV"
+
+          KEY_INFO="$(keytool -list -v -storetype PKCS12 -keystore "$KEYSTORE" -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS")"
+          printf '%s\n' "$KEY_INFO" | grep -q 'Entry type: PrivateKeyEntry'
+          CERT_DIGEST="$(printf '%s\n' "$KEY_INFO" | awk -F': ' '/SHA256:/ {print $2}' | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          EXPECTED_DIGEST="7f9978ade037b7119d411b438f733a3770d1b88af1ac145f8abafbfa69f64b41"
+          if [ "$CERT_DIGEST" != "$EXPECTED_DIGEST" ]; then
+            echo "::error::The uploaded P12 does not match the signing certificate of the current APK."
+            exit 1
+          fi
+
+          node <<'NODE'
+          const fs = require('fs');
+          const version = process.env.APP_VERSION;
+          const [major, minor, patch] = version.split('.').map(Number);
+          const versionCode = major * 10000 + minor * 100 + patch;
+          const file = 'android/app/build.gradle';
+          let gradle = fs.readFileSync(file, 'utf8');
+
+          // Capacitor's generated Android app uses the standard Groovy android{} DSL.
+          // Configure the Android extension in one final block so values and release signing
+          // override the template defaults without depending on their line formatting.
+          if (!gradle.includes('android {') && !gradle.includes('android{')) {
+            throw new Error('Android Gradle extension block is missing.');
+          }
+
+          const finalConfig = `
+
+          // AtbinYar CI release configuration
+          android {
+              defaultConfig {
+                  applicationId "com.atbinyar.mathlab"
+                  versionCode ${versionCode}
+                  versionName "${version}"
+              }
+
+              signingConfigs {
+                  atbinyarRelease {
+                      storeFile file(System.getenv("ANDROID_KEYSTORE_PATH"))
+                      storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                      keyAlias System.getenv("ANDROID_KEY_ALIAS")
+                      keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+                  }
+              }
+
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.atbinyarRelease
+                  }
+              }
+          }
+          `;
+
+          gradle += finalConfig;
+          fs.writeFileSync(file, gradle);
+          console.log('Applied AtbinYar Android package/version/signing: com.atbinyar.mathlab ' + version + ' (' + versionCode + ')');
+          NODE
+      - name: Build APK and AAB
+        working-directory: app/android
+        run: ./gradlew --no-daemon assembleRelease bundleRelease
+
+      - name: Export Android packages with unified filenames
+        env:
+          APP_VERSION: ${{ needs.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+          AAB="android/app/build/outputs/bundle/release/app-release.aab"
+          test -f "$APK"
+          test -f "$AAB"
+          cp "$APK" "android/AtbinYar_v${APP_VERSION}.apk"
+          cp "$AAB" "android/AtbinYar_v${APP_VERSION}.aab"
+          echo "Prepared Android packages: AtbinYar_v${APP_VERSION}.apk and .aab"
+      - name: Verify APK signing certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find android/app/build/outputs/apk/release -name '*.apk' -print -quit)"
+          test -n "$APK"
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -z "$SDK_ROOT" ]; then
+            echo "::error::Android SDK path is not configured."
+            exit 1
+          fi
+          APKSIGNER="$(find "$SDK_ROOT/build-tools" -type f -name apksigner 2>/dev/null | sort -V | tail -n 1)"
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::apksigner was not found in Android SDK build-tools."
+            exit 1
+          fi
+          APK_INFO="$("$APKSIGNER" verify --print-certs "$APK")"
+          printf '%s\\n' "$APK_INFO"
+          CERT_DIGEST="$(printf '%s\\n' "$APK_INFO" | awk '/certificate SHA-256 digest:/ {print $NF; exit}' | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          EXPECTED_DIGEST="7f9978ade037b7119d411b438f733a3770d1b88af1ac145f8abafbfa69f64b41"
+          echo "Built APK SHA-256 signer: ${CERT_DIGEST:-not detected}"
+          if [ "$CERT_DIGEST" != "$EXPECTED_DIGEST" ]; then
+            echo "::error::Built APK signing certificate does not match the current app certificate."
+            exit 1
+          fi
+          echo "APK signature matches the existing AtbinYar signing certificate."
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: |
+            app/android/AtbinYar_v*.apk
+            app/android/AtbinYar_v*.aab
+          if-no-files-found: error
+
+  release:
+    name: Publish one combined release
+    needs: [version, app-math-tests, primecount-wasm, windows, linux, android]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows
+          path: app/release-assets/windows
+      - name: Download Linux release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux
+          path: app/release-assets/linux
+      - name: Download Android release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: android
+          path: app/release-assets/android
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_REPOSITORY: AtbeenLabs/MathLab-App
+          VERSION: ${{ needs.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="v$VERSION"
+
+          # Look up releases through the collection endpoint: the tag endpoint
+          # does not return draft releases. This also makes retries idempotent.
+          RELEASES_API="repos/$TARGET_REPOSITORY/releases?per_page=100"
+          find_release_id() {
+            gh api "$RELEASES_API" \
+              --jq "[.[] | select(.tag_name == \"$TAG\")] | sort_by(.created_at) | last | .id // empty"
+          }
+
+          RELEASE_ID="$(find_release_id)"
+          if [ -z "$RELEASE_ID" ]; then
+            gh release create "$TAG" \
+              --repo "$TARGET_REPOSITORY" \
+              --draft \
+              --title "AtbinYar v$VERSION" \
+              --notes "Automated release from AtbeenYar-Source main."
+
+            # The Releases collection can be briefly eventually-consistent after creation.
+            for attempt in {1..15}; do
+              RELEASE_ID="$(find_release_id)"
+              [ -n "$RELEASE_ID" ] && break
+              echo "Waiting for GitHub Release record ($attempt/15)..."
+              sleep 2
+            done
+          fi
+
+          if [ -z "$RELEASE_ID" ]; then
+            echo "::error::Could not find or create the GitHub Release for $TAG."
+            gh api "$RELEASES_API" --jq '.[] | [.tag_name, .id, .draft] | @tsv' || true
+            exit 1
+          fi
+
+          # Upload files only; artifact folders themselves must not be passed to gh.
+          mapfile -d '' -t ASSETS < <(find release-assets -type f -print0)
+          if [ "${#ASSETS[@]}" -eq 0 ]; then
+            echo "::error::No release files were downloaded from build jobs."
+            exit 1
+          fi
+
+          printf 'Uploading %s release files to release ID %s:\n' "${#ASSETS[@]}" "$RELEASE_ID"
+          printf ' - %s\n' "${ASSETS[@]}"
+          gh release upload "$TAG" "${ASSETS[@]}" \
+            --repo "$TARGET_REPOSITORY" \
+            --clobber
+
+          # Verify every expected asset is present before making the release public.
+          ASSET_JSON="$(gh api "repos/$TARGET_REPOSITORY/releases/$RELEASE_ID/assets?per_page=100")"
+          for ASSET_PATH in "${ASSETS[@]}"; do
+            ASSET_NAME="${ASSET_PATH##*/}"
+            # gh release upload normalizes spaces to dots in asset names.
+            ASSET_NAME="${ASSET_NAME// /.}"
+            if ! jq -e --arg name "$ASSET_NAME" '[.[] | select(.name == $name)] | length == 1' <<< "$ASSET_JSON" >/dev/null; then
+              echo "::error::Release asset missing or duplicated: $ASSET_NAME"
+              exit 1
+            fi
+          done
+
+          # Enforce one public naming convention for every installable package.
+          for EXPECTED_NAME in \
+            "AtbinYar_v${VERSION}.exe" \
+            "AtbinYar_v${VERSION}.apk" \
+            "AtbinYar_v${VERSION}.aab" \
+            "AtbinYar_v${VERSION}.deb" \
+            "AtbinYar_v${VERSION}.AppImage"; do
+            if ! jq -e --arg name "$EXPECTED_NAME" '[.[] | select(.name == $name)] | length == 1' <<< "$ASSET_JSON" >/dev/null; then
+              echo "::error::Expected standardized release asset missing: $EXPECTED_NAME"
+              exit 1
+            fi
+          done
+
+          # Publish only after all platform files pass verification.
+          IS_DRAFT="$(gh api "repos/$TARGET_REPOSITORY/releases/$RELEASE_ID" --jq .draft)"
+          if [ "$IS_DRAFT" = "true" ]; then
+            gh api --method PATCH "repos/$TARGET_REPOSITORY/releases/$RELEASE_ID" \
+              -F draft=false >/dev/null
+          fi
+
+          echo "Published AtbinYar $TAG with ${#ASSETS[@]} verified assets."

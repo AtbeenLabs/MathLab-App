@@ -1,0 +1,146 @@
+name: Remove old application source from public release history
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/purge-source-history.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  sanitize:
+    name: Keep public releases, detach source history
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify release and repository safety
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh api --paginate "repos/AtbeenLabs/MathLab-App/releases?per_page=100" > "$RUNNER_TEMP/releases-before.json"
+
+          IMMUTABLE_COUNT="$(jq '[.[] | select(.immutable == true)] | length' "$RUNNER_TEMP/releases-before.json")"
+          if [ "$IMMUTABLE_COUNT" -ne 0 ]; then
+            echo "::error::Found immutable releases; refusing to move release tags."
+            exit 1
+          fi
+
+          RELEASE_COUNT="$(jq 'length' "$RUNNER_TEMP/releases-before.json")"
+          if [ "$RELEASE_COUNT" -lt 1 ]; then
+            echo "::error::No public releases were found."
+            exit 1
+          fi
+
+          git fetch --force origin main --tags
+          OLD_MAIN="$(git rev-parse refs/remotes/origin/main)"
+          git ls-tree -r --name-only "$OLD_MAIN" > "$RUNNER_TEMP/current-tree.txt"
+
+          while IFS= read -r FILE; do
+            case "$FILE" in
+              ".github/workflows/release.yml"|".github/workflows/purge-source-history.yml"|COPYRIGHT.md|LICENSE|README.md|THIRD_PARTY_NOTICES.md)
+                ;;
+              *)
+                echo "::error::Unexpected public file remains: $FILE"
+                exit 1
+                ;;
+            esac
+          done < "$RUNNER_TEMP/current-tree.txt"
+
+          mapfile -t TAGS < <(git for-each-ref --format='%(refname:strip=2)' refs/tags | sort)
+          if [ "${#TAGS[@]}" -lt "$RELEASE_COUNT" ]; then
+            echo "::error::Some release tags are missing locally."
+            exit 1
+          fi
+
+          jq -S '[.[] | {id, tag_name, assets: ([.assets[] | {id, name, size, browser_download_url}] | sort_by(.name))}] | sort_by(.tag_name)' \
+            "$RUNNER_TEMP/releases-before.json" > "$RUNNER_TEMP/release-assets-before.json"
+
+          printf 'Verified %s mutable releases and %s tags.\n' "$RELEASE_COUNT" "${#TAGS[@]}"
+          echo "OLD_MAIN=$OLD_MAIN" >> "$GITHUB_ENV"
+          echo "RELEASE_COUNT=$RELEASE_COUNT" >> "$GITHUB_ENV"
+          printf '%s\n' "${TAGS[@]}" > "$RUNNER_TEMP/tags.txt"
+          printf '%s\n' "$OLD_MAIN" > "$RUNNER_TEMP/old-main.txt"
+          while IFS= read -r TAG; do
+            printf '%s\t%s\n' "$TAG" "$(git rev-parse "refs/tags/$TAG^{commit}")"
+          done < "$RUNNER_TEMP/tags.txt" > "$RUNNER_TEMP/old-tags.tsv"
+
+      - name: Create a clean release-only root commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          mkdir -p "$RUNNER_TEMP/release-only-tree"
+          git archive "$OLD_MAIN" | tar -x -C "$RUNNER_TEMP/release-only-tree"
+
+          git switch --orphan release-only-history
+          git clean -fdx
+          cp -a "$RUNNER_TEMP/release-only-tree/." .
+          git add -A
+          test -n "$(git status --porcelain)"
+          git commit -m "chore: detach public releases from application source history"
+
+          CLEAN_SHA="$(git rev-parse HEAD)"
+          echo "CLEAN_SHA=$CLEAN_SHA" >> "$GITHUB_ENV"
+
+          while IFS= read -r TAG; do
+            git tag -f "$TAG" "$CLEAN_SHA" >/dev/null
+          done < "$RUNNER_TEMP/tags.txt"
+
+          mapfile -t REFS < <(printf '%s\n' "$CLEAN_SHA:refs/heads/main")
+          while IFS= read -r TAG; do
+            REFS+=("+refs/tags/$TAG:refs/tags/$TAG")
+          done < "$RUNNER_TEMP/tags.txt"
+
+          # One atomic push ensures branch and tag refs move together.
+          git push --atomic --force origin "${REFS[@]}"
+
+      - name: Verify release assets and clean refs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$(git ls-remote origin refs/heads/main | awk '{print $1}')" = "$CLEAN_SHA"
+
+          while IFS= read -r TAG; do
+            REMOTE_TAG="$(git ls-remote origin "refs/tags/$TAG" | awk '{print $1}')"
+            if [ "$REMOTE_TAG" != "$CLEAN_SHA" ]; then
+              echo "::error::Tag did not move to clean history: $TAG"
+              exit 1
+            fi
+          done < "$RUNNER_TEMP/tags.txt"
+
+          gh api --paginate "repos/AtbeenLabs/MathLab-App/releases?per_page=100" > "$RUNNER_TEMP/releases-after.json"
+          jq -S '[.[] | {id, tag_name, assets: ([.assets[] | {id, name, size, browser_download_url}] | sort_by(.name))}] | sort_by(.tag_name)' \
+            "$RUNNER_TEMP/releases-after.json" > "$RUNNER_TEMP/release-assets-after.json"
+
+          if ! diff -u "$RUNNER_TEMP/release-assets-before.json" "$RUNNER_TEMP/release-assets-after.json"; then
+            echo "::error::Release assets changed after history rewrite. Restoring old refs."
+
+            mapfile -t RESTORE_REFS < <(printf '%s\n' "$OLD_MAIN:refs/heads/main")
+            while IFS=$'\t' read -r TAG OLD_SHA; do
+              RESTORE_REFS+=("+$OLD_SHA:refs/tags/$TAG")
+            done < "$RUNNER_TEMP/old-tags.tsv"
+
+            if git push --atomic --force origin "${RESTORE_REFS[@]}"; then
+              echo "::notice::Old Git refs were restored."
+            else
+              echo "::error::Automatic restoration failed; inspect repository refs immediately."
+            fi
+            exit 1
+          fi
+
+          echo "All $RELEASE_COUNT published releases and their assets are unchanged."
+          echo "All public tags and main now point to the source-free release-only commit $CLEAN_SHA."

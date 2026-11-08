@@ -82,6 +82,7 @@ jobs:
     steps:
       - name: Download pinned Estedad font and SIL OFL license
         shell: bash
+        working-directory: ${{ github.workspace }}
         run: |
           set -euo pipefail
           mkdir -p assets/fonts

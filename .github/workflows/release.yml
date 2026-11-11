@@ -503,8 +503,9 @@ jobs:
           test -f "$APK"
           test -f "$AAB"
           cp "$APK" "android/AtbinYar_v${APP_VERSION}.apk"
+          cp "$APK" "android/AtbinYar-Android.apk"
           cp "$AAB" "android/AtbinYar_v${APP_VERSION}.aab"
-          echo "Prepared Android packages: AtbinYar_v${APP_VERSION}.apk and .aab"
+          echo "Prepared versioned Android packages and stable AtbinYar-Android.apk download."
       - name: Verify APK signing certificate
         shell: bash
         run: |
@@ -536,6 +537,7 @@ jobs:
           name: android
           path: |
             app/android/AtbinYar_v*.apk
+            app/android/AtbinYar-Android.apk
             app/android/AtbinYar_v*.aab
           if-no-files-found: error
 
@@ -630,6 +632,7 @@ jobs:
           for EXPECTED_NAME in \
             "AtbinYar_v${VERSION}.exe" \
             "AtbinYar_v${VERSION}.apk" \
+            "AtbinYar-Android.apk" \
             "AtbinYar_v${VERSION}.aab" \
             "AtbinYar_v${VERSION}.deb" \
             "AtbinYar_v${VERSION}.AppImage"; do
